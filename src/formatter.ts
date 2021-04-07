@@ -23,6 +23,8 @@ export interface Block extends BaseBlock {
 
 type HarmonyFormats = {
   delegateMsg: FormatFuncs;
+  undelegateMsg: FormatFuncs;
+  collectRewardsMsg: FormatFuncs;
 };
 
 type Formats = BaseFormats & HarmonyFormats;
@@ -43,10 +45,30 @@ export default class HarmonyFormatter extends Formatter {
     formats.block.nonce = number;
     formats.blockWithTransactions.nonce = number;
 
+    delete formats.transaction.accessList;
+    delete formats.transactionRequest.accessList;
+
+    // formats.transactionRequest.msg = (value) => {
+    //   // dectecing type here is not possible
+    //   return value;
+    // };
+
+    // add msg format
+
     formats.delegateMsg = {
       delegatorAddress: address,
       validatorAddress: address,
       amount: bigNumber,
+    };
+
+    formats.undelegateMsg = {
+      delegatorAddress: address,
+      validatorAddress: address,
+      amount: bigNumber,
+    };
+
+    formats.collectRewardsMsg = {
+      delegatorAddress: address,
     };
 
     return formats;
@@ -56,14 +78,27 @@ export default class HarmonyFormatter extends Formatter {
     return parseTransaction(value);
   }
 
+  transactionRequest(value: any): any {
+    const request = Formatter.check(this.formats.transactionRequest, value);
+
+    if (value.type != null) {
+      request.msg = this.msg(value.type, value.msg);
+    }
+
+    return request;
+  }
+
   msg(type: any, value: any): Msg {
     switch (type) {
       case Directive.Delegate:
         return Formatter.check(this.formats.delegateMsg, value);
+      case Directive.Undelegate:
+        return Formatter.check(this.formats.undelegateMsg, value);
+      case Directive.CollectRewards:
+        return Formatter.check(this.formats.collectRewardsMsg, value);
       default:
-        break;
+        throw new Error("Invalid msg type");
     }
-    return;
   }
 
   address(value: any): string {
@@ -110,8 +145,6 @@ export default class HarmonyFormatter extends Formatter {
       this.formats.transaction,
       transaction
     );
-
-    // result.chainId = 2;
 
     // 0x0000... should actually be null
     if (result.blockHash && result.blockHash.replace(/0/g, "") === "x") {

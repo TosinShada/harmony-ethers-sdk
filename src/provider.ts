@@ -7,7 +7,7 @@ import { getStatic } from "@ethersproject/properties";
 import { BigNumber, BigNumberish } from "@ethersproject/bignumber";
 import { hexlify } from "@ethersproject/bytes";
 import { randomBytes } from "crypto";
-import { Deferrable } from "@ethersproject/properties";
+import { Deferrable, resolveProperties } from "@ethersproject/properties";
 import { Network, Networkish } from "@ethersproject/networks";
 import { Logger } from "@ethersproject/logger";
 import { TransactionRequest, Transaction } from "./transactions";
@@ -264,14 +264,54 @@ class HarmonyProvider extends UrlJsonRpcProvider {
     transaction: Deferrable<TransactionRequest>
   ): Promise<Transaction> {
     const values: any = await transaction;
-    const tx: Transaction = await super._getTransactionRequest(values);
-    delete tx.accessList;
+
+    const tx: any = {};
+
+    ["from", "to"].forEach((key) => {
+      if (values[key] == null) {
+        return;
+      }
+      tx[key] = Promise.resolve(values[key]).then((v) =>
+        v ? this._getAddress(v) : null
+      );
+    });
+
+    ["gasLimit", "gasPrice", "value"].forEach((key) => {
+      if (values[key] == null) {
+        return;
+      }
+      tx[key] = Promise.resolve(values[key]).then((v) =>
+        v ? BigNumber.from(v) : null
+      );
+    });
+
+    ["type"].forEach((key) => {
+      if (values[key] == null) {
+        return;
+      }
+      tx[key] = Promise.resolve(values[key]).then((v) =>
+        v != null ? v : null
+      );
+    });
+
+    if (values.accessList) {
+      // tx.accessList = this.formatter.accessList(values.accessList);
+    }
+
+    ["data"].forEach((key) => {
+      if (values[key] == null) {
+        return;
+      }
+      tx[key] = Promise.resolve(values[key]).then((v) =>
+        v ? hexlify(v) : null
+      );
+    });
 
     if (values?.type !== null && values.msg) {
       tx.msg = this.formatter.msg(values.type, values.msg);
     }
 
-    return tx;
+    return this.formatter.transactionRequest(await resolveProperties(tx));
   }
 }
 

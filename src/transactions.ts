@@ -38,6 +38,10 @@ export type StakingTransactionRequest =
   | {
       type: Directive.Undelegate;
       msg: UndelegateMsg;
+    }
+  | {
+      type: Directive.CollectRewards;
+      msg: CollectRewardsMsg;
     };
 
 export type TransactionRequest =
@@ -129,13 +133,18 @@ function formatNumber(value: BigNumberish, name: string): Uint8Array {
 
 function formatMsg(type: Directive, value: Msg): Array<string | Uint8Array> {
   switch (type) {
-    case Directive.Delegate: {
-      const msg = value as DelegateMsg;
+    case Directive.Delegate:
+    case Directive.Undelegate: {
+      const msg = value as DelegateMsg | UndelegateMsg;
       return [
         getAddress(msg.delegatorAddress).checksum,
         getAddress(msg.validatorAddress).checksum,
         formatNumber(msg.amount, "amount"),
       ];
+    }
+    case Directive.CollectRewards: {
+      const msg = value as CollectRewardsMsg;
+      return [getAddress(msg.delegatorAddress).checksum];
     }
     default:
       logger.throwArgumentError("invalid type", "type", hexlify(type));
@@ -146,21 +155,20 @@ export function serialize(
   transaction: UnsignedTransaction,
   signature?: SignatureLike
 ): string {
-  if (transaction.type) {
+  if (transaction.type != null) {
+    // return logger.throwError(
+    //   `unsupported transaction type: ${transaction.type}`,
+    //   Logger.errors.UNSUPPORTED_OPERATION,
+    //   {
+    //     operation: "serializeTransaction",
+    //     transactionType: transaction.type,
+    //   }
+    // );
     return serializeStakingTransaction(transaction, signature);
   }
 
-  // Legacy and EIP-155 Transactions
+  // Legacy Transactions
   return serializeTransaction(transaction, signature);
-
-  // return logger.throwError(
-  //   `unsupported transaction type: ${transaction.type}`,
-  //   Logger.errors.UNSUPPORTED_OPERATION,
-  //   {
-  //     operation: "serializeTransaction",
-  //     transactionType: transaction.type,
-  //   }
-  // );
 }
 
 export function serializeStakingTransaction(
@@ -235,25 +243,30 @@ function handleNumber(value: string): BigNumber {
 function handleMsg(type: Directive, value: Array<string>): Msg {
   const message = value;
   switch (type) {
+    case Directive.Undelegate:
     case Directive.Delegate:
       return {
         delegatorAddress: handleAddress(message[0]),
         validatorAddress: handleAddress(message[1]),
         amount: handleNumber(message[2]),
-      } as DelegateMsg;
+      } as DelegateMsg | UndelegateMsg;
+    case Directive.CollectRewards:
+      return {
+        delegatorAddress: handleAddress(message[0]),
+      } as CollectRewardsMsg;
     default:
       logger.throwArgumentError("invalid type", "type", hexlify(type));
   }
 }
 
-function parseStakingTransaction(payload: Uint8Array): Transaction {
-  const transaction = RLP.decode(payload);
+function parseStakingTransaction(transaction: any): Transaction {
+  // const transaction = RLP.decode(payload);
 
   if (transaction.length !== 5 && transaction.length !== 8) {
     logger.throwArgumentError(
       "invalid component count for staking transaction",
       "payload",
-      hexlify(payload)
+      ""
     );
   }
 
@@ -271,7 +284,7 @@ function parseStakingTransaction(payload: Uint8Array): Transaction {
   };
 
   // Unsigned Transaction
-  if (transaction.length === 6) {
+  if (transaction.length === 5) {
     return tx;
   }
 
@@ -309,6 +322,7 @@ function parseStakingTransaction(payload: Uint8Array): Transaction {
     }
 
     const digest = keccak256(RLP.encode(raw));
+
     try {
       tx.from = recoverAddress(digest, {
         r: hexlify(tx.r),
@@ -319,7 +333,7 @@ function parseStakingTransaction(payload: Uint8Array): Transaction {
       console.log({ error });
     }
 
-    tx.hash = keccak256(payload);
+    tx.hash = keccak256(RLP.encode(transaction));
   }
 
   return tx;
@@ -327,13 +341,12 @@ function parseStakingTransaction(payload: Uint8Array): Transaction {
 
 export function parse(rawTransaction: BytesLike): Transaction {
   const payload = arrayify(rawTransaction);
+  const transaction = RLP.decode(payload);
 
-  // // Legacy and EIP-155 Transactions
-  // if (payload[0] > 0x7f) {
-  //   return parseTransaction(rawTransaction);
-  // }
+  // TODO: detect if is array without decoding
+  if (Array.isArray(transaction[1])) {
+    return parseStakingTransaction(transaction);
+  }
 
-  // payload[1] rlp array signal?
-
-  return parseStakingTransaction(payload);
+  return parseTransaction(payload);
 }
