@@ -1,8 +1,10 @@
-import {
-  isAddress,
-  getAddress as getChecksumAddress,
-} from "@ethersproject/address";
-import { fromBech32, toBech32, HRP, tHRP } from "./bech32";
+import { isAddress, getAddress as getHexAddress } from "@ethersproject/address";
+import { arrayify, hexlify, hexValue } from "@ethersproject/bytes";
+import { bech32 } from "bech32";
+
+// HRP is the human-readable part of Harmony bech32 addresses
+export const HRP = "one";
+export const tHRP = "tone";
 
 export const isBech32Address = (raw: string): boolean => {
   return !!raw.match(/^one1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{38}/);
@@ -79,7 +81,7 @@ export class HarmonyAddress {
    * ```
    */
   get basicHex() {
-    return `0x${this.basic}`;
+    return hexlify(this.basic);
   }
 
   /**
@@ -91,7 +93,7 @@ export class HarmonyAddress {
    * ```
    */
   get checksum() {
-    return getChecksumAddress(this.basic);
+    return getHexAddress(this.basic);
   }
 
   /**
@@ -103,7 +105,7 @@ export class HarmonyAddress {
    * ```
    */
   get bech32() {
-    return toBech32(this.basic, HRP);
+    return bech32.encode(HRP, bech32.toWords(arrayify(this.basic)));
   }
 
   /**
@@ -115,7 +117,7 @@ export class HarmonyAddress {
    * ```
    */
   get bech32TestNet() {
-    return toBech32(this.basic, tHRP);
+    return bech32.encode(tHRP, bech32.toWords(arrayify(this.basic)));
   }
 
   constructor(raw: string) {
@@ -137,22 +139,15 @@ export class HarmonyAddress {
    * ```
    */
   private getBasic(addr: string) {
-    const basicBool = isAddress(addr);
-    const bech32Bool = isBech32Address(addr);
-    const bech32TestNetBool = isBech32TestNetAddress(addr);
-
-    if (basicBool) {
-      return addr.replace("0x", "").toLowerCase();
+    if (isAddress(addr)) {
+      return getHexAddress(addr).substring(2);
     }
 
-    if (bech32Bool) {
-      const fromB32 = fromBech32(addr, HRP);
-      return fromB32.replace("0x", "").toLowerCase();
-    }
-
-    if (bech32TestNetBool) {
-      const fromB32TestNet = fromBech32(addr, tHRP);
-      return fromB32TestNet.replace("0x", "").toLowerCase();
+    if (isBech32Address(addr) || isBech32TestNetAddress(addr)) {
+      const { prefix, words } = bech32.decode(addr);
+      if (prefix === HRP || prefix === tHRP) {
+        return getHexAddress(hexlify(bech32.fromWords(words))).substring(2);
+      }
     }
 
     throw new Error(`"${addr}" is an invalid address format`);
