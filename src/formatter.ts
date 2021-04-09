@@ -1,33 +1,26 @@
-import {
-  Block as BaseBlock,
-  Formatter,
-  TransactionReceipt,
-  TransactionResponse,
-} from "@ethersproject/providers";
-import { BigNumberish } from "@ethersproject/bignumber";
+import { Formatter, TransactionReceipt } from "@ethersproject/providers";
 import { getAddress } from "./address";
-import {
-  Formats as BaseFormats,
-  FormatFuncs,
-} from "@ethersproject/providers/lib/formatter";
-import {
-  Transaction,
-  Msg,
-  Directive,
-  parse as parseTransaction,
-} from "./transactions";
-
-export interface Block extends BaseBlock {
-  shardId?: BigNumberish;
-}
+import { Formats as BaseFormats, FormatFuncs } from "@ethersproject/providers/lib/formatter";
+import { Transaction, Msg, Directive, parse as parseTransaction, TransactionResponse } from "./transactions";
+import { Block } from "./provider";
 
 type HarmonyFormats = {
+  stakingTransaction: FormatFuncs;
+
   delegateMsg: FormatFuncs;
   undelegateMsg: FormatFuncs;
   collectRewardsMsg: FormatFuncs;
 };
 
 type Formats = BaseFormats & HarmonyFormats;
+
+const TRANSACTION_TYPES = {
+  CreateValidator: 0,
+  EditValidator: 1,
+  Delegate: 2,
+  Undelegate: 3,
+  CollectRewards: 4,
+};
 
 export default class HarmonyFormatter extends Formatter {
   formats: Formats;
@@ -38,22 +31,55 @@ export default class HarmonyFormatter extends Formatter {
   getDefaultFormats(): Formats {
     const number = this.number.bind(this);
     const address = this.address.bind(this);
+    const data = this.data.bind(this);
+    const hash = this.hash.bind(this);
     const bigNumber = this.bigNumber.bind(this);
 
     const formats = super.getDefaultFormats() as Formats;
 
-    formats.block.nonce = number;
-    formats.blockWithTransactions.nonce = number;
-
     delete formats.transaction.accessList;
     delete formats.transactionRequest.accessList;
 
-    // formats.transactionRequest.msg = (value) => {
-    //   // dectecing type here is not possible
-    //   return value;
-    // };
+    Object.assign(formats.block, {
+      nonce: number,
+      epoch: bigNumber,
+      shardID: number,
+      viewID: number,
+      stakingTransactions: formats.block.transactions,
+    });
 
-    // add msg format
+    formats.stakingTransaction = {
+      hash: hash,
+      type: this.transactionType.bind(this),
+
+      blockHash: Formatter.allowNull(hash, null),
+      blockNumber: Formatter.allowNull(number, null),
+      transactionIndex: Formatter.allowNull(number, null),
+
+      confirmations: Formatter.allowNull(number, null),
+
+      from: address,
+
+      gasPrice: bigNumber,
+      gasLimit: bigNumber,
+      nonce: number,
+
+      r: Formatter.allowNull(this.uint256),
+      s: Formatter.allowNull(this.uint256),
+      v: Formatter.allowNull(number),
+
+      raw: Formatter.allowNull(data),
+    };
+
+    Object.assign(formats.blockWithTransactions, {
+      nonce: number,
+      epoch: bigNumber,
+      shardID: number,
+      viewID: number,
+      stakingTransactions: formats.blockWithTransactions.transactions,
+    });
+
+    // msgs formats
 
     formats.delegateMsg = {
       delegatorAddress: address,
@@ -78,6 +104,14 @@ export default class HarmonyFormatter extends Formatter {
     return parseTransaction(value);
   }
 
+  transactionType(value: any): Directive {
+    let type = value;
+    if (typeof value === "string") {
+      type = TRANSACTION_TYPES[value];
+    }
+    return this.number(type);
+  }
+
   transactionRequest(value: any): any {
     const request = Formatter.check(this.formats.transactionRequest, value);
 
@@ -97,6 +131,7 @@ export default class HarmonyFormatter extends Formatter {
       case Directive.CollectRewards:
         return Formatter.check(this.formats.collectRewardsMsg, value);
       default:
+        return value;
         throw new Error("Invalid msg type");
     }
   }
@@ -106,19 +141,14 @@ export default class HarmonyFormatter extends Formatter {
   }
 
   _block(value: any, format: any): Block {
-    const baseBlock = super._block(value, format);
-
-    const block: Block = {
-      ...baseBlock,
-      shardId: this.shardId,
-    };
-
-    return block;
+    if (value.shardID == null) {
+      value.shardID = this.shardId;
+    }
+    return super._block(value, format) as Block;
   }
 
   block(value: any): Block {
-    const block = this._block(value, this.formats.block);
-    return block;
+    return this._block(value, this.formats.block);
   }
 
   blockWithTransactions(value: any): Block {
@@ -131,6 +161,12 @@ export default class HarmonyFormatter extends Formatter {
       transaction.gasLimit = transaction.gas;
     }
 
+    if (transaction.type != null) {
+      const result: TransactionResponse = Formatter.check(this.formats.stakingTransaction, transaction);
+      result.msg = this.msg(result.type, transaction.msg);
+      return result;
+    }
+
     // Rename input to data
     if (transaction.input != null && transaction.data == null) {
       transaction.data = transaction.input;
@@ -141,10 +177,7 @@ export default class HarmonyFormatter extends Formatter {
       transaction.creates = this.contractAddress(transaction);
     }
 
-    const result: TransactionResponse = Formatter.check(
-      this.formats.transaction,
-      transaction
-    );
+    const result: TransactionResponse = Formatter.check(this.formats.transaction, transaction);
 
     // 0x0000... should actually be null
     if (result.blockHash && result.blockHash.replace(/0/g, "") === "x") {
@@ -155,10 +188,7 @@ export default class HarmonyFormatter extends Formatter {
   }
 
   receipt(value: any): TransactionReceipt {
-    const result: TransactionReceipt = Formatter.check(
-      this.formats.receipt,
-      value
-    );
+    const result: TransactionReceipt = Formatter.check(this.formats.receipt, value);
     return result;
   }
 }

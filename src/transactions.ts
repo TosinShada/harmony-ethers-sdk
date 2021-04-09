@@ -1,16 +1,11 @@
-import {
-  arrayify,
-  BytesLike,
-  SignatureLike,
-  splitSignature,
-  stripZeros,
-  hexlify,
-  hexZeroPad,
-  isBytesLike,
-} from "@ethersproject/bytes";
+import { arrayify, BytesLike, SignatureLike, splitSignature, stripZeros, hexlify, hexZeroPad, isBytesLike } from "@ethersproject/bytes";
 import { keccak256 } from "@ethersproject/keccak256";
 import { BigNumber, BigNumberish } from "@ethersproject/bignumber";
-import { TransactionRequest as TransactionRequestBase } from "@ethersproject/abstract-provider";
+import {
+  TransactionRequest as TransactionRequestBase,
+  TransactionResponse as TransactionResponseBase,
+  TransactionReceipt as TransactionReceiptBase,
+} from "@ethersproject/abstract-provider";
 import {
   recoverAddress,
   parse as parseTransaction,
@@ -44,22 +39,41 @@ export type StakingTransactionRequest =
       msg: CollectRewardsMsg;
     };
 
-export type TransactionRequest =
-  | TransactionRequestBase
-  | (TransactionRequestBase & StakingTransactionRequest);
+export type TransactionRequest = TransactionRequestBase | (TransactionRequestBase & StakingTransactionRequest);
 
-export type Transaction = BaseTransaction & {
+export type Transaction = Omit<BaseTransaction, "accessList"> & {
   type?: Directive;
   msg?: Msg;
 };
 
-export type Msg =
-  | CommissionRate
-  | CreateValidatorMsg
-  | EditValidatorMsg
-  | DelegateMsg
-  | UndelegateMsg
-  | CollectRewardsMsg;
+export type Msg = CommissionRate | CreateValidatorMsg | EditValidatorMsg | DelegateMsg | UndelegateMsg | CollectRewardsMsg;
+
+export interface TransactionReceipt extends TransactionReceiptBase {
+  type?: Directive;
+}
+
+export interface TransactionResponse extends Transaction {
+  hash: string;
+
+  // Only if a transaction has been mined
+  blockNumber?: number;
+  blockHash?: string;
+  timestamp?: number;
+
+  confirmations: number;
+
+  // Not optional (as it is in Transaction)
+  from: string;
+
+  // The raw transaction
+  raw?: string;
+
+  shardID?: number;
+  toShardID?: number;
+
+  // This function waits until the transaction has been mined
+  wait: (confirmations?: number) => Promise<TransactionReceiptBase>;
+}
 
 export enum Directive {
   CreateValidator,
@@ -122,11 +136,7 @@ interface CollectRewardsMsg {
 function formatNumber(value: BigNumberish, name: string): Uint8Array {
   const result = stripZeros(BigNumber.from(value).toHexString());
   if (result.length > 32) {
-    logger.throwArgumentError(
-      "invalid length for " + name,
-      "transaction:" + name,
-      value
-    );
+    logger.throwArgumentError("invalid length for " + name, "transaction:" + name, value);
   }
   return result;
 }
@@ -136,11 +146,7 @@ function formatMsg(type: Directive, value: Msg): Array<string | Uint8Array> {
     case Directive.Delegate:
     case Directive.Undelegate: {
       const msg = value as DelegateMsg | UndelegateMsg;
-      return [
-        getAddress(msg.delegatorAddress).checksum,
-        getAddress(msg.validatorAddress).checksum,
-        formatNumber(msg.amount, "amount"),
-      ];
+      return [getAddress(msg.delegatorAddress).checksum, getAddress(msg.validatorAddress).checksum, formatNumber(msg.amount, "amount")];
     }
     case Directive.CollectRewards: {
       const msg = value as CollectRewardsMsg;
@@ -151,10 +157,7 @@ function formatMsg(type: Directive, value: Msg): Array<string | Uint8Array> {
   }
 }
 
-export function serialize(
-  transaction: UnsignedTransaction,
-  signature?: SignatureLike
-): string {
+export function serialize(transaction: UnsignedTransaction, signature?: SignatureLike): string {
   if (transaction.type != null) {
     // return logger.throwError(
     //   `unsupported transaction type: ${transaction.type}`,
@@ -171,10 +174,7 @@ export function serialize(
   return serializeTransaction(transaction, signature);
 }
 
-export function serializeStakingTransaction(
-  transaction: UnsignedTransaction,
-  signature?: SignatureLike
-): string {
+export function serializeStakingTransaction(transaction: UnsignedTransaction, signature?: SignatureLike): string {
   const fields: any = [
     BigNumber.from(transaction.type).toHexString(),
     formatMsg(transaction.type, transaction.msg),
@@ -189,11 +189,7 @@ export function serializeStakingTransaction(
     chainId = transaction.chainId;
 
     if (typeof chainId !== "number") {
-      logger.throwArgumentError(
-        "invalid transaction.chainId",
-        "transaction",
-        transaction
-      );
+      logger.throwArgumentError("invalid transaction.chainId", "transaction", transaction);
     }
   } else if (signature && !isBytesLike(signature) && signature.v > 28) {
     // No chainId provided, but the signature is signing with EIP-155; derive chainId
@@ -263,11 +259,7 @@ function parseStakingTransaction(transaction: any): Transaction {
   // const transaction = RLP.decode(payload);
 
   if (transaction.length !== 5 && transaction.length !== 8) {
-    logger.throwArgumentError(
-      "invalid component count for staking transaction",
-      "payload",
-      ""
-    );
+    logger.throwArgumentError("invalid component count for staking transaction", "payload", "");
   }
 
   const directive: Directive = handleNumber(transaction[0]).toNumber();
@@ -313,6 +305,8 @@ function parseStakingTransaction(transaction: any): Transaction {
     let recoveryParam = tx.v - 27;
 
     const raw = transaction.slice(0, 5);
+
+    // chainId never zero in harmony?
 
     if (tx.chainId !== 0) {
       raw.push(hexlify(tx.chainId));
