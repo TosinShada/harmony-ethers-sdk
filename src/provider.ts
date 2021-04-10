@@ -1,13 +1,22 @@
-import { UrlJsonRpcProvider, BlockTag } from "@ethersproject/providers";
+import { UrlJsonRpcProvider, BlockTag, BaseProvider } from "@ethersproject/providers";
 import { getStatic } from "@ethersproject/properties";
 import { BigNumber, BigNumberish } from "@ethersproject/bignumber";
 import { hexlify } from "@ethersproject/bytes";
 import { randomBytes } from "crypto";
 import { Deferrable, resolveProperties } from "@ethersproject/properties";
 import { Network, Networkish } from "@ethersproject/networks";
-import { TransactionReceipt } from "@ethersproject/abstract-provider";
 import { Logger } from "@ethersproject/logger";
-import { TransactionRequest, Transaction, TransactionResponse } from "./transactions";
+import { parseEther } from "@ethersproject/units";
+import { poll } from "@ethersproject/web";
+import {
+  TransactionRequest,
+  Transaction,
+  TransactionResponse,
+  TransactionReceipt,
+  CXTransactionReceipt,
+  StakingTransactionRequest,
+  StakingTransactionResponse,
+} from "./transactions";
 import HarmonyFormatter from "./formatter";
 const logger = new Logger("hmy_provider/0.0.1");
 
@@ -52,10 +61,10 @@ function timer(timeout: number): Promise<any> {
   });
 }
 
-interface HarmonyProvider {
+export interface HarmonyProvider extends BaseProvider {
   // Execution
   sendTransaction(signedTransaction: string | Promise<string>): Promise<TransactionResponse>;
-  // sendStakeTransaction(signedTransaction: string | Promise<string>): Promise<TransactionRequest>;
+  sendStakingTransaction(signedTransaction: string | Promise<string>): Promise<StakingTransactionResponse>;
 
   call(transaction: Deferrable<TransactionRequest>, blockTag?: BlockTag | Promise<BlockTag>): Promise<string>;
   estimateGas(transaction: Deferrable<TransactionRequest>): Promise<BigNumber>;
@@ -64,14 +73,18 @@ interface HarmonyProvider {
   getBlock(blockHashOrBlockTag: BlockTag | string | Promise<BlockTag | string>): Promise<Block>;
   getBlockWithTransactions(blockHashOrBlockTag: BlockTag | string | Promise<BlockTag | string>): Promise<BlockWithTransactions>;
 
-  // getTransaction(transactionHash: string): Promise<TransactionResponse>;
-  // getTransactionReceipt(transactionHash: string): Promise<TransactionReceipt>;
+  getTransaction(transactionHash: string): Promise<TransactionResponse>;
+  getTransactionReceipt(transactionHash: string): Promise<TransactionReceipt>;
+  getCXTransactionReceipt(transactionHash: string): Promise<CXTransactionReceipt>;
 
-  // getStakeTransaction(transactionHash: string): Promise<TransactionResponse>;
-  // getCXReceipt(transactionHash: string): Promise<TransactionResponse>;
+  getStakingTransaction(transactionHash: string): Promise<StakingTransactionResponse>;
 
-  // getCirculatingSupply(): Promise<number>;
-  // getTotalSupply(): Promise<number>;
+  getCirculatingSupply(): Promise<BigNumber>;
+  getTotalSupply(): Promise<BigNumber>;
+
+  getEpoch(): Promise<BigNumber>;
+
+  getLeader(): Promise<string>;
 
   // getStakingNetworkInfo(): Promise<>;
 
@@ -94,7 +107,6 @@ export class ApiHarmonyProvider extends UrlJsonRpcProvider implements HarmonyPro
   static shardId: number = 0;
 
   static getNetwork(network) {
-    console.log({ network });
     return { name: "HarmonyOne", chainId: 2 };
   }
 
@@ -180,6 +192,30 @@ export class ApiHarmonyProvider extends UrlJsonRpcProvider implements HarmonyPro
     });
   }
 
+  async getCirculatingSupply(): Promise<BigNumber> {
+    return parseEther(await this.send("hmy_getCirculatingSupply", []));
+  }
+
+  async getTotalSupply(): Promise<BigNumber> {
+    return parseEther(await this.send("hmy_getTotalSupply", []));
+  }
+
+  async getEpoch(): Promise<BigNumber> {
+    return this.formatter.bigNumber(await this.send("hmy_getEpoch", []));
+  }
+
+  async getLeader(): Promise<string> {
+    return this.formatter.address(await this.send("hmy_getLeader", []));
+  }
+
+  _wrapTransaction(tx: Transaction, hash?: string): TransactionResponse {
+    return <TransactionResponse>super._wrapTransaction(tx, hash);
+  }
+
+  _wrapStakingTransaction(tx: Transaction, hash?: string): StakingTransactionResponse {
+    return <StakingTransactionResponse>super._wrapTransaction(tx, hash);
+  }
+
   async sendTransaction(signedTransaction: string | Promise<string>): Promise<TransactionResponse> {
     await this.getNetwork();
 
@@ -200,12 +236,33 @@ export class ApiHarmonyProvider extends UrlJsonRpcProvider implements HarmonyPro
     }
   }
 
-  prepareRequest(method: string, params: any): [string, Array<any>] {
-    console.log(this._nextId);
+  async sendStakingTransaction(signedTransaction: string | Promise<string>): Promise<StakingTransactionResponse> {
+    await this.getNetwork();
 
+    const hexTx = hexlify(await Promise.resolve(signedTransaction));
+    const tx = this.formatter.stakingTransaction(signedTransaction);
+
+    try {
+      const hash = await this.perform("sendStackingTransaction", {
+        signedTransaction: hexTx,
+      });
+
+      return this._wrapStakingTransaction(tx, hash);
+    } catch (error) {
+      (<any>error).transaction = tx;
+      (<any>error).transactionHash = tx.hash;
+      throw error;
+    }
+  }
+
+  prepareRequest(method: string, params: any): [string, Array<any>] {
     switch (method) {
       case "sendStackingTransaction":
         return ["hmy_sendRawStakingTransaction", [params.signedTransaction]];
+      case "getStakingTransaction":
+        return ["hmy_getStakingTransactionByHash", [params.transactionHash]];
+      case "getCXTransactionReceipt":
+        return ["hmy_getCXReceiptByHash", [params.transactionHash]];
       default:
         let [rpcMethod, rpcParams] = super.prepareRequest(method, params);
 
@@ -282,8 +339,6 @@ export class ApiHarmonyProvider extends UrlJsonRpcProvider implements HarmonyPro
           tx.confirmations = confirmations;
         }
       }
-
-      return this.formatter.blockWithTransactions(block);
     }
 
     return block;
@@ -295,5 +350,90 @@ export class ApiHarmonyProvider extends UrlJsonRpcProvider implements HarmonyPro
 
   getBlockWithTransactions(blockHashOrBlockTag: BlockTag | string | Promise<BlockTag | string>): Promise<BlockWithTransactions> {
     return <Promise<BlockWithTransactions>>this._getBlock(blockHashOrBlockTag, true);
+  }
+
+  getTransaction(transactionHash: string): Promise<TransactionResponse> {
+    return <Promise<TransactionResponse>>super.getTransaction(transactionHash);
+  }
+
+  async getStakingTransaction(transactionHash: string): Promise<StakingTransactionResponse> {
+    await this.getNetwork();
+    transactionHash = await transactionHash;
+
+    const params = { transactionHash: this.formatter.hash(transactionHash, true) };
+
+    return poll(
+      async () => {
+        const result = await this.perform("getStakingTransaction", params);
+
+        if (result == null) {
+          if (this._emitted["t:" + transactionHash] == null) {
+            return null;
+          }
+          return undefined;
+        }
+
+        const tx = this.formatter.stakingTransactionResponse(result);
+
+        if (tx.blockNumber == null) {
+          tx.confirmations = 0;
+        } else if (tx.confirmations == null) {
+          const blockNumber = await this._getInternalBlockNumber(100 + 2 * this.pollingInterval);
+
+          // Add the confirmations using the fast block number (pessimistic)
+          let confirmations = blockNumber - tx.blockNumber + 1;
+          if (confirmations <= 0) {
+            confirmations = 1;
+          }
+          tx.confirmations = confirmations;
+        }
+
+        return this._wrapTransaction(tx) as StakingTransactionResponse;
+      },
+      { oncePoll: this }
+    );
+  }
+
+  getTransactionReceipt(transactionHash: string): Promise<TransactionReceipt> {
+    return <Promise<TransactionReceipt>>super.getTransactionReceipt(transactionHash);
+  }
+
+  async getCXTransactionReceipt(transactionHash: string): Promise<CXTransactionReceipt> {
+    await this.getNetwork();
+
+    transactionHash = await transactionHash;
+
+    const params = { transactionHash: this.formatter.hash(transactionHash, true) };
+
+    return poll(
+      async () => {
+        const result = await this.perform("getCXTransactionReceipt", params);
+
+        if (result == null) {
+          if (this._emitted["t:" + transactionHash] == null) {
+            return null;
+          }
+          return undefined;
+        }
+
+        const receipt = this.formatter.cXReceipt(result);
+
+        // if (receipt.blockNumber == null) {
+        //   receipt.confirmations = 0;
+        // } else if (receipt.confirmations == null) {
+        //   const blockNumber = await this._getInternalBlockNumber(100 + 2 * this.pollingInterval);
+
+        //   // Add the confirmations using the fast block number (pessimistic)
+        //   let confirmations = blockNumber - receipt.blockNumber + 1;
+        //   if (confirmations <= 0) {
+        //     confirmations = 1;
+        //   }
+        //   receipt.confirmations = confirmations;
+        // }
+
+        return receipt;
+      },
+      { oncePoll: this }
+    );
   }
 }

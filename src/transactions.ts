@@ -1,4 +1,5 @@
 import { arrayify, BytesLike, SignatureLike, splitSignature, stripZeros, hexlify, hexZeroPad, isBytesLike } from "@ethersproject/bytes";
+import { formatUnits, parseUnits } from "@ethersproject/units";
 import { keccak256 } from "@ethersproject/keccak256";
 import { BigNumber, BigNumberish } from "@ethersproject/bignumber";
 import {
@@ -14,66 +15,14 @@ import {
   Transaction as BaseTransaction,
 } from "@ethersproject/transactions";
 import { Logger } from "@ethersproject/logger";
-import { getAddress } from "./address";
 import * as RLP from "@ethersproject/rlp";
 import { Zero } from "@ethersproject/constants";
-
+import { TextDecoder, TextEncoder } from "util";
+import { getAddress } from "./address";
 const logger = new Logger("hmy_transaction/0.0.1");
 
-export type UnsignedTransaction = BaseUnsignedTransaction & {
-  type?: Directive;
-  msg?: Msg;
-};
-
-export type StakingTransactionRequest =
-  | {
-      type: Directive.Delegate;
-      msg: DelegateMsg;
-    }
-  | {
-      type: Directive.Undelegate;
-      msg: UndelegateMsg;
-    }
-  | {
-      type: Directive.CollectRewards;
-      msg: CollectRewardsMsg;
-    };
-
-export type TransactionRequest = TransactionRequestBase | (TransactionRequestBase & StakingTransactionRequest);
-
-export type Transaction = Omit<BaseTransaction, "accessList"> & {
-  type?: Directive;
-  msg?: Msg;
-};
-
-export type Msg = CommissionRate | CreateValidatorMsg | EditValidatorMsg | DelegateMsg | UndelegateMsg | CollectRewardsMsg;
-
-export interface TransactionReceipt extends TransactionReceiptBase {
-  type?: Directive;
-}
-
-export interface TransactionResponse extends Transaction {
-  hash: string;
-
-  // Only if a transaction has been mined
-  blockNumber?: number;
-  blockHash?: string;
-  timestamp?: number;
-
-  confirmations: number;
-
-  // Not optional (as it is in Transaction)
-  from: string;
-
-  // The raw transaction
-  raw?: string;
-
-  shardID?: number;
-  toShardID?: number;
-
-  // This function waits until the transaction has been mined
-  wait: (confirmations?: number) => Promise<TransactionReceiptBase>;
-}
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder("utf-8");
 
 export enum Directive {
   CreateValidator,
@@ -92,17 +41,17 @@ interface Description {
 }
 
 interface CommissionRate {
-  rate: BigNumberish;
-  maxRate: BigNumberish;
-  maxChangeRate: BigNumberish;
+  rate: string;
+  maxRate: string;
+  maxChangeRate: string;
 }
 
 interface CreateValidatorMsg {
   validatorAddress: string;
   description: Description;
   commissionRates: CommissionRate;
-  minSelfDelegation: number;
-  maxTotalDelegation: number;
+  minSelfDelegation: BigNumberish;
+  maxTotalDelegation: BigNumberish;
   slotPubKeys: string[];
   amount: BigNumberish;
 }
@@ -111,8 +60,8 @@ interface EditValidatorMsg {
   validatorAddress: string;
   description: Description;
   commissionRate: BigNumberish;
-  minSelfDelegation: number;
-  maxTotalDelegation: number;
+  minSelfDelegation: BigNumberish;
+  maxTotalDelegation: BigNumberish;
   slotKeyToRemove: string;
   slotKeyToAdd: string;
 }
@@ -133,6 +82,96 @@ interface CollectRewardsMsg {
   delegatorAddress: string;
 }
 
+export type Msg = CommissionRate | CreateValidatorMsg | EditValidatorMsg | DelegateMsg | UndelegateMsg | CollectRewardsMsg;
+
+export type UnsignedTransaction = Omit<BaseUnsignedTransaction, "accessList"> & {
+  type?: Directive;
+  msg?: Msg;
+};
+
+export type StakingTransactionRequest =
+  | {
+      type: Directive.CreateValidator;
+      msg: CreateValidatorMsg;
+    }
+  | {
+      type: Directive.EditValidator;
+      msg: EditValidatorMsg;
+    }
+  | {
+      type: Directive.Delegate;
+      msg: DelegateMsg;
+    }
+  | {
+      type: Directive.Undelegate;
+      msg: UndelegateMsg;
+    }
+  | {
+      type: Directive.CollectRewards;
+      msg: CollectRewardsMsg;
+    };
+
+export type TransactionRequest = TransactionRequestBase | (TransactionRequestBase & StakingTransactionRequest);
+
+export interface Transaction extends Omit<BaseTransaction, "accessList"> {
+  type?: Directive;
+  msg?: Msg;
+}
+
+export interface TransactionReceipt extends TransactionReceiptBase {
+  type?: Directive;
+}
+
+interface Response {
+  blockNumber?: number;
+  blockHash?: string;
+  timestamp?: number;
+
+  confirmations: number;
+}
+
+export interface StakingTransactionResponse extends Transaction, Response {
+  hash: string;
+
+  type: Directive;
+  msg: Msg;
+
+  // Not optional (as it is in Transaction)
+  from: string;
+
+  // The raw transaction
+  raw?: string;
+
+  wait: (confirmations?: number) => Promise<TransactionReceipt>;
+}
+
+export interface TransactionResponse extends Transaction, Response {
+  hash: string;
+
+  // Not optional (as it is in Transaction)
+  from: string;
+
+  // The raw transaction
+  raw?: string;
+
+  shardID: number;
+  toShardID?: number;
+
+  // This function waits until the transaction has been mined
+  wait: (confirmations?: number) => Promise<TransactionReceipt>;
+}
+
+export interface CXTransactionReceipt {
+  blockHash: string;
+  blockNumber: number;
+  transactionHash: string;
+  to: string;
+  from: string;
+  shardID: number;
+  toShardID: number;
+  value: BigNumber;
+}
+
 function formatNumber(value: BigNumberish, name: string): Uint8Array {
   const result = stripZeros(BigNumber.from(value).toHexString());
   if (result.length > 32) {
@@ -141,8 +180,54 @@ function formatNumber(value: BigNumberish, name: string): Uint8Array {
   return result;
 }
 
-function formatMsg(type: Directive, value: Msg): Array<string | Uint8Array> {
+function formatDecimal(value: string, name: string): Array<Uint8Array> {
+  // const result = formatUnits(parseUnits(value, 18), 18);
+  // if (result.length > 32) {
+  //   logger.throwArgumentError("invalid length for " + name, "transaction:" + name, value);
+  // }
+  return [arrayify(parseUnits(value, 18).toHexString())];
+}
+
+function formatDescription(value: Description): Array<Uint8Array> {
+  return [
+    textEncoder.encode(value.name),
+    textEncoder.encode(value.identity),
+    textEncoder.encode(value.website),
+    textEncoder.encode(value.securityContact),
+    textEncoder.encode(value.details),
+  ];
+}
+
+function formatComissionRates(value: CommissionRate): Array<Array<Uint8Array>> {
+  return [formatDecimal(value.rate, "rate"), formatDecimal(value.maxRate, "maxRate"), formatDecimal(value.maxChangeRate, "maxChangeRate")];
+}
+
+function formatMsg(type: Directive, value: Msg): any {
   switch (type) {
+    case Directive.CreateValidator: {
+      const msg = value as CreateValidatorMsg;
+      return [
+        getAddress(msg.validatorAddress).checksum,
+        formatDescription(msg.description),
+        formatComissionRates(msg.commissionRates),
+        formatNumber(msg.minSelfDelegation, "minSelfDelegation"),
+        formatNumber(msg.maxTotalDelegation, "maxTotalDelegation"),
+        msg.slotPubKeys.map((key) => arrayify(key)),
+        formatNumber(msg.amount, "amount"),
+      ];
+    }
+    case Directive.EditValidator: {
+      const msg = value as EditValidatorMsg;
+      return [
+        getAddress(msg.validatorAddress).checksum,
+        formatDescription(msg.description),
+        formatNumber(msg.commissionRate, "commissionRate"),
+        formatNumber(msg.minSelfDelegation, "minSelfDelegation"),
+        formatNumber(msg.maxTotalDelegation, "maxTotalDelegation"),
+        msg.slotKeyToRemove ? hexlify(msg.slotKeyToRemove) : "0x",
+        msg.slotKeyToAdd ? hexlify(msg.slotKeyToAdd) : "0x",
+      ];
+    }
     case Directive.Delegate:
     case Directive.Undelegate: {
       const msg = value as DelegateMsg | UndelegateMsg;
@@ -176,7 +261,7 @@ export function serialize(transaction: UnsignedTransaction, signature?: Signatur
 
 export function serializeStakingTransaction(transaction: UnsignedTransaction, signature?: SignatureLike): string {
   const fields: any = [
-    BigNumber.from(transaction.type).toHexString(),
+    transaction.type === 0 ? "0x" : BigNumber.from(transaction.type).toHexString(),
     formatMsg(transaction.type, transaction.msg),
     formatNumber(transaction.nonce || 0, "nonce"),
     formatNumber(transaction.gasPrice || 0, "gasPrice"),
@@ -236,33 +321,78 @@ function handleNumber(value: string): BigNumber {
   return BigNumber.from(value);
 }
 
-function handleMsg(type: Directive, value: Array<string>): Msg {
-  const message = value;
+function handleDecimal(value: string): string {
+  return value;
+}
+
+function handleText(value: string): string {
+  return textDecoder.decode(arrayify(value));
+}
+
+function handleValidatorDescription(value: Array<string>): Description {
+  return {
+    name: handleText(value[0]),
+    identity: handleText(value[1]),
+    website: handleText(value[2]),
+    securityContact: handleText(value[3]),
+    details: handleText(value[4]),
+  };
+}
+
+function handleValidatorCommissionRates(value: Array<string>): CommissionRate {
+  return {
+    rate: handleDecimal(value[0]),
+    maxRate: handleDecimal(value[1]),
+    maxChangeRate: handleDecimal(value[2]),
+  };
+}
+
+function handleMsg(type: Directive, value: Array<string | Array<string>>): Msg {
   switch (type) {
+    case Directive.CreateValidator:
+      return {
+        validatorAddress: handleAddress(<string>value[0]),
+        description: handleValidatorDescription(<Array<string>>value[1]),
+        commissionRates: handleValidatorCommissionRates(<Array<string>>value[2]),
+        minSelfDelegation: handleNumber(<string>value[3]),
+        maxTotalDelegation: handleNumber(<string>value[4]),
+        slotPubKeys: value[5],
+        amount: handleNumber(<string>value[6]),
+      } as CreateValidatorMsg;
+    case Directive.EditValidator:
+      return {
+        validatorAddress: handleAddress(<string>value[0]),
+        description: handleValidatorDescription(<Array<string>>value[1]),
+        commissionRate: handleNumber(<string>value[2]),
+        minSelfDelegation: handleNumber(<string>value[3]),
+        maxTotalDelegation: handleNumber(<string>value[4]),
+        slotKeyToRemove: value[5],
+        slotKeyToAdd: value[6],
+      } as EditValidatorMsg;
     case Directive.Undelegate:
     case Directive.Delegate:
       return {
-        delegatorAddress: handleAddress(message[0]),
-        validatorAddress: handleAddress(message[1]),
-        amount: handleNumber(message[2]),
+        delegatorAddress: handleAddress(<string>value[0]),
+        validatorAddress: handleAddress(<string>value[1]),
+        amount: handleNumber(<string>value[2]),
       } as DelegateMsg | UndelegateMsg;
     case Directive.CollectRewards:
       return {
-        delegatorAddress: handleAddress(message[0]),
+        delegatorAddress: handleAddress(<string>value[0]),
       } as CollectRewardsMsg;
     default:
       logger.throwArgumentError("invalid type", "type", hexlify(type));
   }
 }
 
-function parseStakingTransaction(transaction: any): Transaction {
+function handleStakingTransaction(transaction: any): Transaction {
   // const transaction = RLP.decode(payload);
 
   if (transaction.length !== 5 && transaction.length !== 8) {
     logger.throwArgumentError("invalid component count for staking transaction", "payload", "");
   }
 
-  const directive: Directive = handleNumber(transaction[0]).toNumber();
+  const directive: Directive = transaction[0] === "0x" ? 0 : handleNumber(transaction[0]).toNumber();
 
   const tx: Transaction = {
     type: directive,
@@ -333,13 +463,16 @@ function parseStakingTransaction(transaction: any): Transaction {
   return tx;
 }
 
+export function parseStakingTransaction(payload: Uint8Array): Transaction {
+  return handleStakingTransaction(RLP.decode(payload));
+}
+
 export function parse(rawTransaction: BytesLike): Transaction {
   const payload = arrayify(rawTransaction);
+  // TODO: detect if is stakingTransaction without decoding
   const transaction = RLP.decode(payload);
-
-  // TODO: detect if is array without decoding
   if (Array.isArray(transaction[1])) {
-    return parseStakingTransaction(transaction);
+    return handleStakingTransaction(transaction);
   }
 
   return parseTransaction(payload);

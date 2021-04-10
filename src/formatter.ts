@@ -1,12 +1,30 @@
+import { BigNumber } from "@ethersproject/bignumber";
 import { Formatter, TransactionReceipt } from "@ethersproject/providers";
+import { parseUnits, formatUnits } from "@ethersproject/units";
 import { getAddress } from "./address";
 import { Formats as BaseFormats, FormatFuncs } from "@ethersproject/providers/lib/formatter";
-import { Transaction, Msg, Directive, parse as parseTransaction, TransactionResponse } from "./transactions";
+import {
+  Transaction,
+  Msg,
+  Directive,
+  parse as parseTransaction,
+  parseStakingTransaction,
+  TransactionResponse,
+  StakingTransactionResponse,
+  CXTransactionReceipt,
+} from "./transactions";
 import { Block } from "./provider";
 
 type HarmonyFormats = {
   stakingTransaction: FormatFuncs;
 
+  cXReceipt: FormatFuncs;
+
+  description: FormatFuncs;
+  commissionRate: FormatFuncs;
+
+  createValidatorMsg: FormatFuncs;
+  editValidatorMsg: FormatFuncs;
   delegateMsg: FormatFuncs;
   undelegateMsg: FormatFuncs;
   collectRewardsMsg: FormatFuncs;
@@ -34,11 +52,22 @@ export default class HarmonyFormatter extends Formatter {
     const data = this.data.bind(this);
     const hash = this.hash.bind(this);
     const bigNumber = this.bigNumber.bind(this);
+    const decimal = this.decimal.bind(this);
+    const transactionType = this.transactionType.bind(this);
+
+    const value = (v: string) => v; // todo
 
     const formats = super.getDefaultFormats() as Formats;
 
     delete formats.transaction.accessList;
     delete formats.transactionRequest.accessList;
+
+    formats.transaction.shardID = number;
+    formats.transaction.toShardID = Formatter.allowNull(number);
+
+    formats.transaction.type = Formatter.allowNull(transactionType);
+    formats.transactionRequest.type = Formatter.allowNull(transactionType);
+    formats.receipt.type = Formatter.allowNull(transactionType);
 
     Object.assign(formats.block, {
       nonce: number,
@@ -50,7 +79,8 @@ export default class HarmonyFormatter extends Formatter {
 
     formats.stakingTransaction = {
       hash: hash,
-      type: this.transactionType.bind(this),
+
+      type: transactionType,
 
       blockHash: Formatter.allowNull(hash, null),
       blockNumber: Formatter.allowNull(number, null),
@@ -79,7 +109,49 @@ export default class HarmonyFormatter extends Formatter {
       stakingTransactions: formats.blockWithTransactions.transactions,
     });
 
+    formats.cXReceipt = {
+      blockHash: hash,
+      blockNumber: number,
+      to: address,
+      from: address,
+      shardID: number,
+      toShardID: number,
+      value: bigNumber,
+      // confirmations: Formatter.allowNull(number, null),
+    };
+
     // msgs formats
+
+    formats.description = {
+      name: value,
+      identity: value,
+      website: value,
+      securityContact: value,
+      details: value,
+    };
+
+    formats.commissionRate = {
+      rate: decimal,
+      maxRate: decimal,
+      maxChangeRate: decimal,
+    };
+
+    formats.createValidatorMsg = {
+      validatorAddress: address,
+      amount: bigNumber,
+      minSelfDelegation: bigNumber,
+      maxTotalDelegation: bigNumber,
+      slotPubKeys: Formatter.arrayOf(value),
+    };
+
+    formats.editValidatorMsg = {
+      validatorAddress: address,
+      commissionRate: bigNumber,
+      minSelfDelegation: bigNumber,
+      maxTotalDelegation: bigNumber,
+      slotPubKeyToAdd: Formatter.allowNull(value),
+      slotPubKeyToRemove: Formatter.allowNull(value),
+    };
 
     formats.delegateMsg = {
       delegatorAddress: address,
@@ -100,8 +172,16 @@ export default class HarmonyFormatter extends Formatter {
     return formats;
   }
 
+  decimal(value: any): BigNumber {
+    return parseUnits(value, 18);
+  }
+
   transaction(value: any): Transaction {
     return parseTransaction(value);
+  }
+
+  stakingTransaction(value: any): Transaction {
+    return parseStakingTransaction(value);
   }
 
   transactionType(value: any): Directive {
@@ -109,6 +189,9 @@ export default class HarmonyFormatter extends Formatter {
     if (typeof value === "string") {
       type = TRANSACTION_TYPES[value];
     }
+
+    // throw on invalid type ?
+
     return this.number(type);
   }
 
@@ -116,14 +199,47 @@ export default class HarmonyFormatter extends Formatter {
     const request = Formatter.check(this.formats.transactionRequest, value);
 
     if (value.type != null) {
-      request.msg = this.msg(value.type, value.msg);
+      request.msg = this.msgRequest(value.type, value.msg);
     }
 
     return request;
   }
 
+  msgRequest(type: any, value: any): Msg {
+    switch (type) {
+      case Directive.CreateValidator: {
+        let msg = Formatter.check(this.formats.createValidatorMsg, value);
+        msg.commissionRates = Formatter.check(this.formats.commissionRate, value.commissionRates);
+        msg.description = Formatter.check(this.formats.description, value.description);
+        return msg;
+      }
+      case Directive.EditValidator: {
+        let msg = Formatter.check(this.formats.editValidatorMsg, value);
+        msg.description = Formatter.check(this.formats.description, value);
+        return msg;
+      }
+      default:
+        return this.msg(type, value);
+    }
+  }
+
   msg(type: any, value: any): Msg {
     switch (type) {
+      case Directive.CreateValidator: {
+        let msg = Formatter.check(this.formats.createValidatorMsg, value);
+        msg.commissionRates = Formatter.check(this.formats.commissionRate, {
+          rate: value.commissionRate,
+          maxRate: value.maxCommissionRate,
+          maxChangeRate: value.maxChangeRate,
+        });
+        msg.description = Formatter.check(this.formats.description, value);
+        return msg;
+      }
+      case Directive.EditValidator: {
+        let msg = Formatter.check(this.formats.editValidatorMsg, value);
+        msg.description = Formatter.check(this.formats.description, value);
+        return msg;
+      }
       case Directive.Delegate:
         return Formatter.check(this.formats.delegateMsg, value);
       case Directive.Undelegate:
@@ -131,7 +247,6 @@ export default class HarmonyFormatter extends Formatter {
       case Directive.CollectRewards:
         return Formatter.check(this.formats.collectRewardsMsg, value);
       default:
-        return value;
         throw new Error("Invalid msg type");
     }
   }
@@ -187,8 +302,26 @@ export default class HarmonyFormatter extends Formatter {
     return result;
   }
 
+  stakingTransactionResponse(transaction: any): StakingTransactionResponse {
+    if (transaction.gas != null && transaction.gasLimit == null) {
+      transaction.gasLimit = transaction.gas;
+    }
+
+    const result: StakingTransactionResponse = Formatter.check(this.formats.stakingTransaction, transaction);
+    result.msg = this.msg(result.type, transaction.msg);
+    return result;
+  }
+
   receipt(value: any): TransactionReceipt {
+    if (value.type != null) {
+      value.from = value.sender;
+    }
+
     const result: TransactionReceipt = Formatter.check(this.formats.receipt, value);
     return result;
+  }
+
+  cXReceipt(value: any): CXTransactionReceipt {
+    return Formatter.check(this.formats.cXReceipt, value);
   }
 }

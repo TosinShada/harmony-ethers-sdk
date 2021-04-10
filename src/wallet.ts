@@ -1,16 +1,25 @@
 import { getAddress } from "./address";
 import { Wallet } from "@ethersproject/wallet";
-import { Directive, TransactionRequest, serialize, UnsignedTransaction } from "./transactions";
+import {
+  Directive,
+  TransactionRequest,
+  serialize,
+  UnsignedTransaction,
+  StakingTransactionResponse,
+  StakingTransactionRequest,
+  TransactionResponse,
+} from "./transactions";
+import { HarmonyProvider } from "./provider";
 import { resolveProperties, Deferrable, shallowCopy } from "@ethersproject/properties";
 import { keccak256 } from "@ethersproject/keccak256";
 import { formatUnits, parseUnits } from "@ethersproject/units";
-
 import { Logger } from "@ethersproject/logger";
 const logger = new Logger("hmy_wallet/0.0.1");
 
 const allowedTransactionKeys: Array<string> = ["chainId", "data", "from", "gasLimit", "gasPrice", "nonce", "to", "type", "value", "msg"];
 
 export default class HarmonyWallet extends Wallet {
+  provider: HarmonyProvider;
   async getChainId(): Promise<number> {
     this._checkProvider("getChainId");
     const network = await this.provider.getNetwork();
@@ -73,5 +82,20 @@ export default class HarmonyWallet extends Wallet {
     }
 
     return tx;
+  }
+
+  async sendTransaction(transaction: Deferrable<TransactionRequest>): Promise<TransactionResponse> {
+    this._checkProvider("sendTransaction");
+    const tx = await this.populateTransaction(transaction);
+    const signedTx = await this.signTransaction(tx);
+    return await this.provider.sendTransaction(signedTx);
+  }
+
+  // Populates all fields in a transaction, signs it and sends it to the network
+  async sendStakingTransaction(transaction: Deferrable<StakingTransactionRequest>): Promise<StakingTransactionResponse> {
+    this._checkProvider("sendStakingTransaction");
+    const tx = await this.populateTransaction(transaction);
+    const signedTx = await this.signTransaction(tx);
+    return await this.provider.sendStakingTransaction(signedTx);
   }
 }
