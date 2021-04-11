@@ -1,8 +1,10 @@
 import { BigNumber } from "@ethersproject/bignumber";
 import { Formatter, TransactionReceipt } from "@ethersproject/providers";
 import { parseUnits, formatUnits } from "@ethersproject/units";
-import { getAddress } from "./address";
 import { Formats as BaseFormats, FormatFuncs } from "@ethersproject/providers/lib/formatter";
+import { shallowCopy } from "@ethersproject/properties";
+import { Zero, One, Two } from "@ethersproject/constants";
+import { getAddress } from "./address";
 import {
   Transaction,
   Msg,
@@ -24,7 +26,11 @@ type HarmonyFormats = {
   commissionRate: FormatFuncs;
 
   createValidatorMsg: FormatFuncs;
+  createValidatorRequestMsg: FormatFuncs;
+
   editValidatorMsg: FormatFuncs;
+  editValidatorRequestMsg: FormatFuncs;
+
   delegateMsg: FormatFuncs;
   undelegateMsg: FormatFuncs;
   collectRewardsMsg: FormatFuncs;
@@ -144,14 +150,21 @@ export default class HarmonyFormatter extends Formatter {
       slotPubKeys: Formatter.arrayOf(value),
     };
 
+    formats.createValidatorRequestMsg = shallowCopy(formats.createValidatorMsg);
+    formats.createValidatorRequestMsg.slotKeySigs = Formatter.arrayOf(value);
+
     formats.editValidatorMsg = {
       validatorAddress: address,
-      commissionRate: bigNumber,
-      minSelfDelegation: bigNumber,
-      maxTotalDelegation: bigNumber,
-      slotPubKeyToAdd: Formatter.allowNull(value),
-      slotPubKeyToRemove: Formatter.allowNull(value),
+      commissionRate: Formatter.allowNull(decimal, "0x0"),
+      minSelfDelegation: Formatter.allowNull(bigNumber, "0x0"),
+      maxTotalDelegation: Formatter.allowNull(bigNumber, "0x0"),
+      slotPubKeyToAdd: Formatter.allowNull(value, null),
+      slotPubKeyToRemove: Formatter.allowNull(value, null),
     };
+
+    formats.editValidatorRequestMsg = shallowCopy(formats.editValidatorMsg);
+    formats.editValidatorRequestMsg.slotKeySigs = Formatter.allowNull(Formatter.arrayOf(value), []);
+    formats.editValidatorRequestMsg.active = Formatter.allowNull((value) => value, null);
 
     formats.delegateMsg = {
       delegatorAddress: address,
@@ -173,6 +186,9 @@ export default class HarmonyFormatter extends Formatter {
   }
 
   decimal(value: any): BigNumber {
+    if (value === "0x0") {
+      return null;
+    }
     return parseUnits(value, 18);
   }
 
@@ -208,29 +224,38 @@ export default class HarmonyFormatter extends Formatter {
   msgRequest(type: any, value: any): Msg {
     switch (type) {
       case Directive.CreateValidator: {
-        let msg = Formatter.check(this.formats.createValidatorMsg, value);
+        let msg = Formatter.check(this.formats.createValidatorRequestMsg, value);
         msg.commissionRates = Formatter.check(this.formats.commissionRate, value.commissionRates);
         msg.description = Formatter.check(this.formats.description, value.description);
         return msg;
       }
       case Directive.EditValidator: {
-        let msg = Formatter.check(this.formats.editValidatorMsg, value);
-        msg.description = Formatter.check(this.formats.description, value);
+        let msg = Formatter.check(this.formats.editValidatorRequestMsg, value);
+        msg.description = Formatter.check(this.formats.description, value.description);
         return msg;
       }
+      case Directive.Delegate:
+        return Formatter.check(this.formats.delegateMsg, value);
+      case Directive.Undelegate:
+        return Formatter.check(this.formats.undelegateMsg, value);
+      case Directive.CollectRewards:
+        return Formatter.check(this.formats.collectRewardsMsg, value);
       default:
-        return this.msg(type, value);
+        throw new Error("Invalid msg type");
     }
   }
 
-  msg(type: any, value: any): Msg {
+  msgResponse(type: any, value: any): Msg {
+    console.log({
+      value,
+    });
     switch (type) {
       case Directive.CreateValidator: {
         let msg = Formatter.check(this.formats.createValidatorMsg, value);
         msg.commissionRates = Formatter.check(this.formats.commissionRate, {
-          rate: value.commissionRate,
-          maxRate: value.maxCommissionRate,
-          maxChangeRate: value.maxChangeRate,
+          rate: formatUnits(BigNumber.from(value.commissionRate), 18),
+          maxRate: formatUnits(BigNumber.from(value.maxCommissionRate), 18),
+          maxChangeRate: formatUnits(BigNumber.from(value.maxChangeRate), 18),
         });
         msg.description = Formatter.check(this.formats.description, value);
         return msg;
@@ -278,7 +303,7 @@ export default class HarmonyFormatter extends Formatter {
 
     if (transaction.type != null) {
       const result: TransactionResponse = Formatter.check(this.formats.stakingTransaction, transaction);
-      result.msg = this.msg(result.type, transaction.msg);
+      result.msg = this.msgResponse(result.type, transaction.msg);
       return result;
     }
 
@@ -308,7 +333,7 @@ export default class HarmonyFormatter extends Formatter {
     }
 
     const result: StakingTransactionResponse = Formatter.check(this.formats.stakingTransaction, transaction);
-    result.msg = this.msg(result.type, transaction.msg);
+    result.msg = this.msgResponse(result.type, transaction.msg);
     return result;
   }
 

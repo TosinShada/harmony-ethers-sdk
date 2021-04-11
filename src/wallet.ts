@@ -12,7 +12,7 @@ import {
 import { HarmonyProvider } from "./provider";
 import { resolveProperties, Deferrable, shallowCopy } from "@ethersproject/properties";
 import { keccak256 } from "@ethersproject/keccak256";
-import { formatUnits, parseUnits } from "@ethersproject/units";
+import { parseUnits } from "@ethersproject/units";
 import { Logger } from "@ethersproject/logger";
 const logger = new Logger("hmy_wallet/0.0.1");
 
@@ -23,9 +23,6 @@ export default class HarmonyWallet extends Wallet {
   async getChainId(): Promise<number> {
     this._checkProvider("getChainId");
     const network = await this.provider.getNetwork();
-    console.log({
-      network,
-    });
     return network.chainId;
   }
 
@@ -33,13 +30,16 @@ export default class HarmonyWallet extends Wallet {
     const tx: Deferrable<TransactionRequest> = await resolveProperties(this.checkTransaction(transaction));
 
     if (tx.type != null) {
-      // stake transaciton estimateGas possible?
       if (tx.gasPrice == null) {
         tx.gasPrice = parseUnits("100", 9);
       }
 
       if (tx.gasLimit == null) {
-        tx.gasLimit = parseUnits("210000", 0);
+        if (tx.type === Directive.CreateValidator) {
+          tx.gasLimit = parseUnits("5300000", 0).add(100000); // TODO: calculate using tx bytes;
+        } else {
+          tx.gasLimit = parseUnits("210000", 0);
+        }
       }
     }
 

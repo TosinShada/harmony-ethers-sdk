@@ -16,7 +16,7 @@ import {
 } from "@ethersproject/transactions";
 import { Logger } from "@ethersproject/logger";
 import * as RLP from "@ethersproject/rlp";
-import { Zero } from "@ethersproject/constants";
+import { Zero, One, Two } from "@ethersproject/constants";
 import { TextDecoder, TextEncoder } from "util";
 import { getAddress } from "./address";
 const logger = new Logger("hmy_transaction/0.0.1");
@@ -53,17 +53,20 @@ interface CreateValidatorMsg {
   minSelfDelegation: BigNumberish;
   maxTotalDelegation: BigNumberish;
   slotPubKeys: string[];
+  slotKeySigs?: string[];
   amount: BigNumberish;
 }
 
 interface EditValidatorMsg {
   validatorAddress: string;
-  description: Description;
-  commissionRate: BigNumberish;
-  minSelfDelegation: BigNumberish;
-  maxTotalDelegation: BigNumberish;
-  slotKeyToRemove: string;
-  slotKeyToAdd: string;
+  description?: Partial<Description>;
+  commissionRate?: string;
+  minSelfDelegation?: BigNumberish;
+  maxTotalDelegation?: BigNumberish;
+  slotKeyToRemove?: string;
+  slotKeyToAdd?: string;
+  slotKeySig?: string;
+  active?: boolean;
 }
 
 interface DelegateMsg {
@@ -180,25 +183,30 @@ function formatNumber(value: BigNumberish, name: string): Uint8Array {
   return result;
 }
 
-function formatDecimal(value: string, name: string): Array<Uint8Array> {
+function formatDecimal(value: BigNumberish | string, name: string): Array<string> {
   // const result = formatUnits(parseUnits(value, 18), 18);
   // if (result.length > 32) {
   //   logger.throwArgumentError("invalid length for " + name, "transaction:" + name, value);
   // }
-  return [arrayify(parseUnits(value, 18).toHexString())];
+
+  if (typeof value === "string") {
+    return [parseUnits(<string>value, 18).toHexString()];
+  }
+
+  return [BigNumber.from(value).toHexString()];
 }
 
-function formatDescription(value: Description): Array<Uint8Array> {
+function formatDescription(value: Partial<Description>): Array<Uint8Array> {
   return [
-    textEncoder.encode(value.name),
-    textEncoder.encode(value.identity),
-    textEncoder.encode(value.website),
-    textEncoder.encode(value.securityContact),
-    textEncoder.encode(value.details),
+    textEncoder.encode(value.name ?? ""),
+    textEncoder.encode(value.identity ?? ""),
+    textEncoder.encode(value.website ?? ""),
+    textEncoder.encode(value.securityContact ?? ""),
+    textEncoder.encode(value.details ?? ""),
   ];
 }
 
-function formatComissionRates(value: CommissionRate): Array<Array<Uint8Array>> {
+function formatComissionRates(value: CommissionRate): Array<Array<string>> {
   return [formatDecimal(value.rate, "rate"), formatDecimal(value.maxRate, "maxRate"), formatDecimal(value.maxChangeRate, "maxChangeRate")];
 }
 
@@ -213,6 +221,7 @@ function formatMsg(type: Directive, value: Msg): any {
         formatNumber(msg.minSelfDelegation, "minSelfDelegation"),
         formatNumber(msg.maxTotalDelegation, "maxTotalDelegation"),
         msg.slotPubKeys.map((key) => arrayify(key)),
+        msg.slotKeySigs.map((sig) => arrayify(sig)),
         formatNumber(msg.amount, "amount"),
       ];
     }
@@ -220,12 +229,14 @@ function formatMsg(type: Directive, value: Msg): any {
       const msg = value as EditValidatorMsg;
       return [
         getAddress(msg.validatorAddress).checksum,
-        formatDescription(msg.description),
-        formatNumber(msg.commissionRate, "commissionRate"),
-        formatNumber(msg.minSelfDelegation, "minSelfDelegation"),
-        formatNumber(msg.maxTotalDelegation, "maxTotalDelegation"),
+        msg.description ? formatDescription(msg.description) : [],
+        msg.commissionRate ? formatDecimal(msg.commissionRate, "commissionRate") : "0x",
+        msg.minSelfDelegation ? formatNumber(msg.minSelfDelegation, "minSelfDelegation") : "0x",
+        msg.maxTotalDelegation ? formatNumber(msg.maxTotalDelegation, "maxTotalDelegation") : "0x",
         msg.slotKeyToRemove ? hexlify(msg.slotKeyToRemove) : "0x",
         msg.slotKeyToAdd ? hexlify(msg.slotKeyToAdd) : "0x",
+        msg.slotKeySig ? hexlify(msg.slotKeySig) : "0x",
+        msg.active != null ? (msg.active ? One.toHexString() : Two.toHexString()) : Zero.toHexString(),
       ];
     }
     case Directive.Delegate:
@@ -347,6 +358,24 @@ function handleValidatorCommissionRates(value: Array<string>): CommissionRate {
   };
 }
 
+function handleActive(value: string): boolean | null {
+  const status = BigNumber.from(value);
+
+  if (status.eq(Zero)) {
+    return null;
+  }
+
+  if (status.eq(One)) {
+    return true;
+  }
+
+  if (status.eq(Two)) {
+    return false;
+  }
+
+  return null;
+}
+
 function handleMsg(type: Directive, value: Array<string | Array<string>>): Msg {
   switch (type) {
     case Directive.CreateValidator:
@@ -357,17 +386,20 @@ function handleMsg(type: Directive, value: Array<string | Array<string>>): Msg {
         minSelfDelegation: handleNumber(<string>value[3]),
         maxTotalDelegation: handleNumber(<string>value[4]),
         slotPubKeys: value[5],
-        amount: handleNumber(<string>value[6]),
+        slotKeySigs: value[6],
+        amount: handleNumber(<string>value[7]),
       } as CreateValidatorMsg;
     case Directive.EditValidator:
       return {
         validatorAddress: handleAddress(<string>value[0]),
         description: handleValidatorDescription(<Array<string>>value[1]),
-        commissionRate: handleNumber(<string>value[2]),
+        commissionRate: handleDecimal(<string>value[2]),
         minSelfDelegation: handleNumber(<string>value[3]),
         maxTotalDelegation: handleNumber(<string>value[4]),
         slotKeyToRemove: value[5],
         slotKeyToAdd: value[6],
+        slotKeySig: value[7],
+        active: handleActive(<string>value[8]),
       } as EditValidatorMsg;
     case Directive.Undelegate:
     case Directive.Delegate:

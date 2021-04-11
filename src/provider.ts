@@ -308,7 +308,7 @@ export class ApiHarmonyProvider extends UrlJsonRpcProvider implements HarmonyPro
     });
 
     if (values?.type !== null && values.msg) {
-      tx.msg = this.formatter.msg(values.type, values.msg);
+      tx.msg = this.formatter.msgRequest(values.type, values.msg);
     }
 
     return this.formatter.transactionRequest(await resolveProperties(tx));
