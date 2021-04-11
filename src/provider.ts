@@ -1,23 +1,22 @@
-import { UrlJsonRpcProvider, BlockTag, BaseProvider } from "@ethersproject/providers";
+import { BlockTag, BaseProvider, JsonRpcProvider } from "@ethersproject/providers";
 import { getStatic } from "@ethersproject/properties";
 import { BigNumber, BigNumberish } from "@ethersproject/bignumber";
 import { hexlify } from "@ethersproject/bytes";
 import { randomBytes } from "crypto";
 import { Deferrable, resolveProperties } from "@ethersproject/properties";
-import { Network, Networkish } from "@ethersproject/networks";
+import { Network } from "@ethersproject/networks";
 import { Logger } from "@ethersproject/logger";
 import { parseEther } from "@ethersproject/units";
-import { poll } from "@ethersproject/web";
+import { ConnectionInfo, poll } from "@ethersproject/web";
 import {
   TransactionRequest,
   Transaction,
   TransactionResponse,
   TransactionReceipt,
   CXTransactionReceipt,
-  StakingTransactionRequest,
   StakingTransactionResponse,
 } from "./transactions";
-import HarmonyFormatter from "./formatter";
+import HarmonyFormatter, { Delegation } from "./formatter";
 const logger = new Logger("hmy_provider/0.0.1");
 
 interface BlockBase {
@@ -82,87 +81,82 @@ export interface HarmonyProvider extends BaseProvider {
   getCirculatingSupply(): Promise<BigNumber>;
   getTotalSupply(): Promise<BigNumber>;
 
-  getEpoch(): Promise<BigNumber>;
+  getEpoch(): Promise<number>;
+  getEpochLastBlock(epoch: number): Promise<number>;
 
   getLeader(): Promise<string>;
 
-  // getStakingNetworkInfo(): Promise<>;
+  getValidatorsAddresses(): Promise<Array<string>>;
+  getActiveValidatorsAddresses(): Promise<Array<string>>;
 
-  // getValidators(epochNumber: number);
-
-  // getValidatorsAddresses(); Promise<Array<string>>;
-  // getActiveValidatorsAddresses(); Promise<Array<string>>;
-  // getValidator(validatorAddress: string);
-  // getValidatorMetrics(validatorAddress: string);
-
-  // getMedianStake()
-
-  // getValidatorSignedBlocks(validatorAddress: string);
-
-  // getBlockSigners(blockNumber: BlockTag)
-  // isBlockSigner(blockNumber: BlockTag, validatorAddress: string)
+  getDelegationsByValidator(validatorAddress: string): Promise<Array<Delegation>>;
+  getDelegationsByDelegator(delegatorAddress: string): Promise<Array<Delegation>>;
 }
 
-export class ApiHarmonyProvider extends UrlJsonRpcProvider implements HarmonyProvider {
-  static shardId: number = 0;
+interface ShardStructure {
+  current: boolean;
+  http: string;
+  shardID: number;
+  ws: string;
+}
 
-  static getNetwork(network) {
-    return { name: "HarmonyOne", chainId: 2 };
-  }
+interface HarmonyNetwork extends Network {
+  shardID: number;
+  shardingStructure?: ShardStructure[];
+}
 
-  static getApiKey(apiKey) {
-    return apiKey;
-  }
+export type Networkish = HarmonyNetwork | number;
 
-  static getUrl() {
-    return ApiHarmonyProvider.getShardingStructure()[ApiHarmonyProvider.shardId].http;
-  }
+const networks = [
+  {
+    name: "mainnet",
+    chainId: 1,
+  },
+  {
+    name: "testnet",
+    chainId: 2,
+  },
+  {
+    name: "localnet",
+    chainId: 3,
+  },
+];
 
-  static setShard(number: number) {
-    this.shardId = number;
-  }
+export class ApiHarmonyProvider extends JsonRpcProvider implements HarmonyProvider {
+  static getNetwork(network: Networkish, shardingStructure?: ShardStructure[]): HarmonyNetwork {
+    if (typeof network === "number") {
+      let shardID = shardingStructure?.find((shard) => shard.current)?.shardID ?? 0;
 
-  static getShardingStructure() {
-    return [
-      {
-        http: "https://api.s0.b.hmny.io",
-        shardID: 0,
-        ws: "wss://ws.s0.b.hmny.io",
-      },
-      {
-        http: "https://api.s1.b.hmny.io",
-        shardID: 1,
-        ws: "wss://ws.s1.b.hmny.io",
-      },
-      {
-        http: "https://api.s2.b.hmny.io",
-        shardID: 2,
-        ws: "wss://ws.s2.b.hmny.io",
-      },
-      {
-        http: "https://api.s3.b.hmny.io",
-        shardID: 3,
-        ws: "wss://ws.s3.b.hmny.io",
-      },
-    ];
-  }
+      const { name } = networks.find(({ chainId }) => chainId === network) ?? { name: "unknown" };
+      return {
+        shardID,
+        name,
+        chainId: network,
+      };
+    }
 
-  static getShard() {
-    return this.shardId;
+    return network;
   }
 
   static getFormatter(): HarmonyFormatter {
-    return new HarmonyFormatter(ApiHarmonyProvider.shardId);
+    return new HarmonyFormatter();
   }
 
   formatter: HarmonyFormatter;
 
-  constructor() {
-    super();
+  _networkPromise: Promise<HarmonyNetwork>;
+  _network: HarmonyNetwork;
+
+  constructor(url?: ConnectionInfo | string) {
+    super(url);
     this._nextId = randomBytes(1).readUInt8();
   }
 
-  async detectNetwork(): Promise<Network> {
+  get network(): HarmonyNetwork {
+    return this._network;
+  }
+
+  async detectNetwork(): Promise<HarmonyNetwork> {
     await timer(0);
 
     let chainId = null;
@@ -174,10 +168,18 @@ export class ApiHarmonyProvider extends UrlJsonRpcProvider implements HarmonyPro
       } catch (error) {}
     }
 
+    let shardingStructure = null;
+    try {
+      shardingStructure = await this.send("hmy_getShardingStructure", []);
+    } catch (error) {}
+
     if (chainId != null) {
-      const getNetwork = getStatic<(network: Networkish) => Network>(this.constructor, "getNetwork");
+      const getNetwork = getStatic<(network: Networkish, shardingStructure?: ShardStructure[]) => HarmonyNetwork>(
+        this.constructor,
+        "getNetwork"
+      );
       try {
-        return getNetwork(BigNumber.from(chainId).toNumber());
+        return getNetwork(BigNumber.from(chainId).toNumber(), shardingStructure);
       } catch (error) {
         return logger.throwError("could not detect network", Logger.errors.NETWORK_ERROR, {
           chainId: chainId,
@@ -200,12 +202,36 @@ export class ApiHarmonyProvider extends UrlJsonRpcProvider implements HarmonyPro
     return parseEther(await this.send("hmy_getTotalSupply", []));
   }
 
-  async getEpoch(): Promise<BigNumber> {
-    return this.formatter.bigNumber(await this.send("hmy_getEpoch", []));
+  async getEpoch(): Promise<number> {
+    return this.formatter.number(await this.send("hmy_getEpoch", []));
+  }
+
+  async getEpochLastBlock(epoch: number): Promise<number> {
+    return this.formatter.number(await this.send("hmy_epochLastBlock", [epoch]));
   }
 
   async getLeader(): Promise<string> {
     return this.formatter.address(await this.send("hmy_getLeader", []));
+  }
+
+  async getValidatorsAddresses(): Promise<Array<string>> {
+    const validators = await this.send("hmy_getAllValidatorAddresses", []);
+    return validators.map((address) => this.formatter.address(address));
+  }
+
+  async getActiveValidatorsAddresses(): Promise<Array<string>> {
+    const validators = await this.send("hmy_getActiveValidatorAddresses", []);
+    return validators.map((address) => this.formatter.address(address));
+  }
+
+  async getDelegationsByValidator(validatorAddress: string): Promise<Array<Delegation>> {
+    const result = await this.send("hmy_getDelegationsByValidator", [validatorAddress]);
+    return result.map((delegation) => this.formatter.delegation(delegation));
+  }
+
+  async getDelegationsByDelegator(delegatorAddress: string): Promise<Array<Delegation>> {
+    const result = await this.send("hmy_getDelegationsByDelegator", [delegatorAddress]);
+    return result.map((delegation) => this.formatter.delegation(delegation));
   }
 
   _wrapTransaction(tx: Transaction, hash?: string): TransactionResponse {
@@ -319,6 +345,8 @@ export class ApiHarmonyProvider extends UrlJsonRpcProvider implements HarmonyPro
     includeTransactions?: boolean
   ): Promise<Block | BlockWithTransactions> {
     const block = (await super._getBlock(blockHashOrBlockTag, includeTransactions)) as Block | BlockWithTransactions;
+
+    block.shardID = this.network.shardID;
 
     if (includeTransactions) {
       let blockNumber: number = null;

@@ -3,7 +3,6 @@ import { Formatter, TransactionReceipt } from "@ethersproject/providers";
 import { parseUnits, formatUnits } from "@ethersproject/units";
 import { Formats as BaseFormats, FormatFuncs } from "@ethersproject/providers/lib/formatter";
 import { shallowCopy } from "@ethersproject/properties";
-import { Zero, One, Two } from "@ethersproject/constants";
 import { getAddress } from "./address";
 import {
   Transaction,
@@ -34,7 +33,20 @@ type HarmonyFormats = {
   delegateMsg: FormatFuncs;
   undelegateMsg: FormatFuncs;
   collectRewardsMsg: FormatFuncs;
+
+  delegation: FormatFuncs;
 };
+
+export interface Delegation {
+  validatorAddress: string;
+  delegatorAddress: string;
+  amount: number;
+  reward: number;
+  undelegations: {
+    amount: number;
+    reward: number;
+  }[];
+}
 
 type Formats = BaseFormats & HarmonyFormats;
 
@@ -48,7 +60,7 @@ const TRANSACTION_TYPES = {
 
 export default class HarmonyFormatter extends Formatter {
   formats: Formats;
-  constructor(private shardId: number) {
+  constructor() {
     super();
   }
 
@@ -78,7 +90,6 @@ export default class HarmonyFormatter extends Formatter {
     Object.assign(formats.block, {
       nonce: number,
       epoch: bigNumber,
-      shardID: number,
       viewID: number,
       stakingTransactions: formats.block.transactions,
     });
@@ -182,6 +193,21 @@ export default class HarmonyFormatter extends Formatter {
       delegatorAddress: address,
     };
 
+    formats.delegation = {
+      delegatorAddress: address,
+      validatorAddress: address,
+      amount: value,
+      reward: value,
+      undelegations: (v) =>
+        Formatter.check(
+          {
+            amount: value,
+            reward: value,
+          },
+          v
+        ),
+    };
+
     return formats;
   }
 
@@ -278,9 +304,6 @@ export default class HarmonyFormatter extends Formatter {
   }
 
   _block(value: any, format: any): Block {
-    if (value.shardID == null) {
-      value.shardID = this.shardId;
-    }
     return super._block(value, format) as Block;
   }
 
@@ -345,5 +368,15 @@ export default class HarmonyFormatter extends Formatter {
 
   cXReceipt(value: any): CXTransactionReceipt {
     return Formatter.check(this.formats.cXReceipt, value);
+  }
+
+  delegation(value: any): Delegation {
+    return Formatter.check(this.formats.delegation, {
+      validatorAddress: value.validator_address,
+      delegatorAddress: value.delegator_address,
+      amount: value.amount,
+      reward: value.reward,
+      undelegations: value.Undelegations,
+    });
   }
 }

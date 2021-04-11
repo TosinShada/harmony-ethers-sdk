@@ -1,10 +1,9 @@
 import { arrayify, BytesLike, SignatureLike, splitSignature, stripZeros, hexlify, hexZeroPad, isBytesLike } from "@ethersproject/bytes";
-import { formatUnits, parseUnits } from "@ethersproject/units";
+import { parseUnits } from "@ethersproject/units";
 import { keccak256 } from "@ethersproject/keccak256";
 import { BigNumber, BigNumberish } from "@ethersproject/bignumber";
 import {
   TransactionRequest as TransactionRequestBase,
-  TransactionResponse as TransactionResponseBase,
   TransactionReceipt as TransactionReceiptBase,
 } from "@ethersproject/abstract-provider";
 import {
@@ -183,12 +182,7 @@ function formatNumber(value: BigNumberish, name: string): Uint8Array {
   return result;
 }
 
-function formatDecimal(value: BigNumberish | string, name: string): Array<string> {
-  // const result = formatUnits(parseUnits(value, 18), 18);
-  // if (result.length > 32) {
-  //   logger.throwArgumentError("invalid length for " + name, "transaction:" + name, value);
-  // }
-
+function formatDecimal(value: BigNumberish | string): Array<string> {
   if (typeof value === "string") {
     return [parseUnits(<string>value, 18).toHexString()];
   }
@@ -207,7 +201,7 @@ function formatDescription(value: Partial<Description>): Array<Uint8Array> {
 }
 
 function formatComissionRates(value: CommissionRate): Array<Array<string>> {
-  return [formatDecimal(value.rate, "rate"), formatDecimal(value.maxRate, "maxRate"), formatDecimal(value.maxChangeRate, "maxChangeRate")];
+  return [formatDecimal(value.rate), formatDecimal(value.maxRate), formatDecimal(value.maxChangeRate)];
 }
 
 function formatMsg(type: Directive, value: Msg): any {
@@ -230,7 +224,7 @@ function formatMsg(type: Directive, value: Msg): any {
       return [
         getAddress(msg.validatorAddress).checksum,
         msg.description ? formatDescription(msg.description) : [],
-        msg.commissionRate ? formatDecimal(msg.commissionRate, "commissionRate") : "0x",
+        msg.commissionRate ? formatDecimal(msg.commissionRate) : "0x",
         msg.minSelfDelegation ? formatNumber(msg.minSelfDelegation, "minSelfDelegation") : "0x",
         msg.maxTotalDelegation ? formatNumber(msg.maxTotalDelegation, "maxTotalDelegation") : "0x",
         msg.slotKeyToRemove ? hexlify(msg.slotKeyToRemove) : "0x",
