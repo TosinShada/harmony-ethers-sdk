@@ -246,9 +246,6 @@ export default class HarmonyFormatter extends Formatter {
   }
 
   msgResponse(type: any, value: any): Msg {
-    console.log({
-      value,
-    });
     switch (type) {
       case Directive.CreateValidator: {
         let msg = Formatter.check(this.formats.createValidatorMsg, value);
