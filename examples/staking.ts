@@ -1,7 +1,7 @@
 import { ExternallyOwnedAccount } from "@ethersproject/abstract-signer";
 import { parseEther } from "@ethersproject/units";
 import { ApiHarmonyProvider } from "../src/provider";
-import { Directive, StakingTransactionRequest } from "../src/transactions";
+import { Directive, StakingTransactionRequest } from "../src/types";
 import Wallet from "../src/wallet";
 
 const account: ExternallyOwnedAccount = {
@@ -10,15 +10,14 @@ const account: ExternallyOwnedAccount = {
 };
 
 async function main() {
-  ApiHarmonyProvider.setShard(0);
-  const provider = new ApiHarmonyProvider();
+  const provider = new ApiHarmonyProvider("https://api.s0.b.hmny.io");
   const wallet = new Wallet(account, provider);
   await provider.ready;
 
   const createValidator: StakingTransactionRequest = {
     type: Directive.CreateValidator,
     msg: {
-      validatorAddress: "0xCEE9afb8bCE80867362E9a2EbC14505665614F8A",
+      validatorAddress: wallet.address,
       amount: parseEther("10000"),
       commissionRates: {
         rate: "0.1",
@@ -42,7 +41,7 @@ async function main() {
   const editValidator: StakingTransactionRequest = {
     type: Directive.EditValidator,
     msg: {
-      validatorAddress: "0xCEE9afb8bCE80867362E9a2EbC14505665614F8A",
+      validatorAddress: wallet.address,
       commissionRate: "0.09",
       // maxTotalDelegation: null,
       // minSelfDelegation: null,
@@ -85,7 +84,7 @@ async function main() {
     },
   };
 
-  const res = await wallet.sendStakingTransaction(createValidator);
+  const res = await wallet.sendStakingTransaction(delegate);
 
   console.log({
     res,
