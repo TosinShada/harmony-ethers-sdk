@@ -8,12 +8,12 @@ import {
   Transaction,
   Msg,
   Directive,
-  parse as parseTransaction,
-  parseStakingTransaction,
   TransactionResponse,
   StakingTransactionResponse,
   CXTransactionReceipt,
-} from "./transactions";
+  StakingTransaction,
+} from "./types";
+import { parseTransaction, parseStakingTransaction } from "./transactions";
 import { Block } from "./provider";
 
 type HarmonyFormats = {
@@ -77,21 +77,22 @@ export default class HarmonyFormatter extends Formatter {
 
     const formats = super.getDefaultFormats() as Formats;
 
+    delete formats.transaction.type;
     delete formats.transaction.accessList;
+    delete formats.transactionRequest.type;
     delete formats.transactionRequest.accessList;
 
     formats.transaction.shardID = number;
     formats.transaction.toShardID = Formatter.allowNull(number);
 
-    formats.transaction.type = Formatter.allowNull(transactionType);
-    formats.transactionRequest.type = Formatter.allowNull(transactionType);
     formats.receipt.type = Formatter.allowNull(transactionType);
 
     Object.assign(formats.block, {
       nonce: number,
       epoch: bigNumber,
       viewID: number,
-      stakingTransactions: formats.block.transactions,
+      mixHash: hash,
+      stakingTransactions: Formatter.allowNull(Formatter.arrayOf(hash)),
     });
 
     formats.stakingTransaction = {
@@ -105,14 +106,12 @@ export default class HarmonyFormatter extends Formatter {
 
       confirmations: Formatter.allowNull(number, null),
 
-      from: address,
-
       gasPrice: bigNumber,
       gasLimit: bigNumber,
       nonce: number,
 
-      r: Formatter.allowNull(this.uint256),
-      s: Formatter.allowNull(this.uint256),
+      r: Formatter.allowNull(this.uint256.bind(this)),
+      s: Formatter.allowNull(this.uint256.bind(this)),
       v: Formatter.allowNull(number),
 
       raw: Formatter.allowNull(data),
@@ -121,9 +120,9 @@ export default class HarmonyFormatter extends Formatter {
     Object.assign(formats.blockWithTransactions, {
       nonce: number,
       epoch: bigNumber,
-      shardID: number,
       viewID: number,
-      stakingTransactions: formats.blockWithTransactions.transactions,
+      mixHash: hash,
+      stakingTransactions: Formatter.allowNull(Formatter.arrayOf(this.stakingTransactionResponse.bind(this))),
     });
 
     formats.cXReceipt = {
@@ -222,7 +221,7 @@ export default class HarmonyFormatter extends Formatter {
     return parseTransaction(value);
   }
 
-  stakingTransaction(value: any): Transaction {
+  stakingTransaction(value: any): StakingTransaction {
     return parseStakingTransaction(value);
   }
 
@@ -237,41 +236,7 @@ export default class HarmonyFormatter extends Formatter {
     return this.number(type);
   }
 
-  transactionRequest(value: any): any {
-    const request = Formatter.check(this.formats.transactionRequest, value);
-
-    if (value.type != null) {
-      request.msg = this.msgRequest(value.type, value.msg);
-    }
-
-    return request;
-  }
-
-  msgRequest(type: any, value: any): Msg {
-    switch (type) {
-      case Directive.CreateValidator: {
-        let msg = Formatter.check(this.formats.createValidatorRequestMsg, value);
-        msg.commissionRates = Formatter.check(this.formats.commissionRate, value.commissionRates);
-        msg.description = Formatter.check(this.formats.description, value.description);
-        return msg;
-      }
-      case Directive.EditValidator: {
-        let msg = Formatter.check(this.formats.editValidatorRequestMsg, value);
-        msg.description = Formatter.check(this.formats.description, value.description);
-        return msg;
-      }
-      case Directive.Delegate:
-        return Formatter.check(this.formats.delegateMsg, value);
-      case Directive.Undelegate:
-        return Formatter.check(this.formats.undelegateMsg, value);
-      case Directive.CollectRewards:
-        return Formatter.check(this.formats.collectRewardsMsg, value);
-      default:
-        throw new Error("Invalid msg type");
-    }
-  }
-
-  msgResponse(type: any, value: any): Msg {
+  msg(type: any, value: any): Msg {
     switch (type) {
       case Directive.CreateValidator: {
         let msg = Formatter.check(this.formats.createValidatorMsg, value);
@@ -321,12 +286,6 @@ export default class HarmonyFormatter extends Formatter {
       transaction.gasLimit = transaction.gas;
     }
 
-    if (transaction.type != null) {
-      const result: TransactionResponse = Formatter.check(this.formats.stakingTransaction, transaction);
-      result.msg = this.msgResponse(result.type, transaction.msg);
-      return result;
-    }
-
     // Rename input to data
     if (transaction.input != null && transaction.data == null) {
       transaction.data = transaction.input;
@@ -353,7 +312,7 @@ export default class HarmonyFormatter extends Formatter {
     }
 
     const result: StakingTransactionResponse = Formatter.check(this.formats.stakingTransaction, transaction);
-    result.msg = this.msgResponse(result.type, transaction.msg);
+    result.msg = this.msg(result.type, transaction.msg);
     return result;
   }
 

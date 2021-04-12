@@ -15,7 +15,8 @@ import {
   TransactionReceipt,
   CXTransactionReceipt,
   StakingTransactionResponse,
-} from "./transactions";
+  StakingTransaction,
+} from "./types";
 import HarmonyFormatter, { Delegation } from "./formatter";
 const logger = new Logger("hmy_provider/0.0.1");
 
@@ -61,6 +62,8 @@ function timer(timeout: number): Promise<any> {
 }
 
 export interface HarmonyProvider extends BaseProvider {
+  network: HarmonyNetwork;
+
   // Execution
   sendTransaction(signedTransaction: string | Promise<string>): Promise<TransactionResponse>;
   sendStakingTransaction(signedTransaction: string | Promise<string>): Promise<StakingTransactionResponse>;
@@ -147,6 +150,8 @@ export class ApiHarmonyProvider extends JsonRpcProvider implements HarmonyProvid
   _networkPromise: Promise<HarmonyNetwork>;
   _network: HarmonyNetwork;
 
+  _shardingStructure?: ShardStructure[]; // cache
+
   constructor(url?: ConnectionInfo | string) {
     super(url);
     this._nextId = randomBytes(1).readUInt8();
@@ -168,10 +173,14 @@ export class ApiHarmonyProvider extends JsonRpcProvider implements HarmonyProvid
       } catch (error) {}
     }
 
-    let shardingStructure = null;
-    try {
-      shardingStructure = await this.send("hmy_getShardingStructure", []);
-    } catch (error) {}
+    // this is used to dectec the current shard
+    // maybe this could be inferred from network Id last digit
+    let shardingStructure = this._shardingStructure;
+    if (!shardingStructure) {
+      try {
+        shardingStructure = await this.send("hmy_getShardingStructure", []);
+      } catch (error) {}
+    }
 
     if (chainId != null) {
       const getNetwork = getStatic<(network: Networkish, shardingStructure?: ShardStructure[]) => HarmonyNetwork>(
@@ -238,8 +247,10 @@ export class ApiHarmonyProvider extends JsonRpcProvider implements HarmonyProvid
     return <TransactionResponse>super._wrapTransaction(tx, hash);
   }
 
-  _wrapStakingTransaction(tx: Transaction, hash?: string): StakingTransactionResponse {
-    return <StakingTransactionResponse>super._wrapTransaction(tx, hash);
+  _wrapStakingTransaction(tx: StakingTransaction, hash?: string): StakingTransactionResponse {
+    const response = <StakingTransactionResponse>tx;
+    response.hash = hash;
+    return response;
   }
 
   async sendTransaction(signedTransaction: string | Promise<string>): Promise<TransactionResponse> {
@@ -249,8 +260,7 @@ export class ApiHarmonyProvider extends JsonRpcProvider implements HarmonyProvid
     const tx = this.formatter.transaction(signedTransaction);
 
     try {
-      const method = tx.type != null ? "sendStackingTransaction" : "sendTransaction";
-      const hash = await this.perform(method, {
+      const hash = await this.perform("sendTransaction", {
         signedTransaction: hexTx,
       });
 
@@ -298,46 +308,6 @@ export class ApiHarmonyProvider extends JsonRpcProvider implements HarmonyProvid
 
         return [rpcMethod, rpcParams];
     }
-  }
-
-  async _getTransactionRequest(transaction: Deferrable<TransactionRequest>): Promise<Transaction> {
-    const values: any = await transaction;
-
-    const tx: any = {};
-
-    ["from", "to"].forEach((key) => {
-      if (values[key] == null) {
-        return;
-      }
-      tx[key] = Promise.resolve(values[key]).then((v) => (v ? this._getAddress(v) : null));
-    });
-
-    ["gasLimit", "gasPrice", "value"].forEach((key) => {
-      if (values[key] == null) {
-        return;
-      }
-      tx[key] = Promise.resolve(values[key]).then((v) => (v ? BigNumber.from(v) : null));
-    });
-
-    ["type"].forEach((key) => {
-      if (values[key] == null) {
-        return;
-      }
-      tx[key] = Promise.resolve(values[key]).then((v) => (v != null ? v : null));
-    });
-
-    ["data"].forEach((key) => {
-      if (values[key] == null) {
-        return;
-      }
-      tx[key] = Promise.resolve(values[key]).then((v) => (v ? hexlify(v) : null));
-    });
-
-    if (values?.type !== null && values.msg) {
-      tx.msg = this.formatter.msgRequest(values.type, values.msg);
-    }
-
-    return this.formatter.transactionRequest(await resolveProperties(tx));
   }
 
   async _getBlock(
@@ -416,50 +386,19 @@ export class ApiHarmonyProvider extends JsonRpcProvider implements HarmonyProvid
           tx.confirmations = confirmations;
         }
 
-        return this._wrapTransaction(tx) as StakingTransactionResponse;
+        return this._wrapStakingTransaction(tx);
       },
       { oncePoll: this }
     );
   }
 
-  getTransactionReceipt(transactionHash: string): Promise<TransactionReceipt> {
-    return <Promise<TransactionReceipt>>super.getTransactionReceipt(transactionHash);
-  }
-
   async getCXTransactionReceipt(transactionHash: string): Promise<CXTransactionReceipt> {
     await this.getNetwork();
-
-    transactionHash = await transactionHash;
-
     const params = { transactionHash: this.formatter.hash(transactionHash, true) };
-
     return poll(
       async () => {
         const result = await this.perform("getCXTransactionReceipt", params);
-
-        if (result == null) {
-          if (this._emitted["t:" + transactionHash] == null) {
-            return null;
-          }
-          return undefined;
-        }
-
-        const receipt = this.formatter.cXReceipt(result);
-
-        // if (receipt.blockNumber == null) {
-        //   receipt.confirmations = 0;
-        // } else if (receipt.confirmations == null) {
-        //   const blockNumber = await this._getInternalBlockNumber(100 + 2 * this.pollingInterval);
-
-        //   // Add the confirmations using the fast block number (pessimistic)
-        //   let confirmations = blockNumber - receipt.blockNumber + 1;
-        //   if (confirmations <= 0) {
-        //     confirmations = 1;
-        //   }
-        //   receipt.confirmations = confirmations;
-        // }
-
-        return receipt;
+        return this.formatter.cXReceipt(result);
       },
       { oncePoll: this }
     );

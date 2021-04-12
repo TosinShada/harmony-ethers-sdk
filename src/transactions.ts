@@ -1,178 +1,66 @@
-import { arrayify, BytesLike, SignatureLike, splitSignature, stripZeros, hexlify, hexZeroPad, isBytesLike } from "@ethersproject/bytes";
+import {
+  arrayify,
+  BytesLike,
+  SignatureLike,
+  splitSignature,
+  stripZeros,
+  hexlify,
+  hexZeroPad,
+  isBytesLike,
+  DataOptions,
+} from "@ethersproject/bytes";
 import { parseUnits } from "@ethersproject/units";
 import { keccak256 } from "@ethersproject/keccak256";
 import { BigNumber, BigNumberish } from "@ethersproject/bignumber";
-import {
-  TransactionRequest as TransactionRequestBase,
-  TransactionReceipt as TransactionReceiptBase,
-} from "@ethersproject/abstract-provider";
-import {
-  recoverAddress,
-  parse as parseTransaction,
-  serialize as serializeTransaction,
-  UnsignedTransaction as BaseUnsignedTransaction,
-  Transaction as BaseTransaction,
-} from "@ethersproject/transactions";
+import { recoverAddress } from "@ethersproject/transactions";
 import { Logger } from "@ethersproject/logger";
 import * as RLP from "@ethersproject/rlp";
 import { Zero, One, Two } from "@ethersproject/constants";
+import { checkProperties } from "@ethersproject/properties";
 import { TextDecoder, TextEncoder } from "util";
 import { getAddress } from "./address";
+import {
+  CollectRewardsMsg,
+  CommissionRate,
+  CreateValidatorMsg,
+  DelegateMsg,
+  Description,
+  Directive,
+  EditValidatorMsg,
+  Msg,
+  UndelegateMsg,
+  Transaction,
+  StakingTransaction,
+  UnsignedTransaction,
+  UnsignedStakingTransaction,
+} from "./types";
 const logger = new Logger("hmy_transaction/0.0.1");
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder("utf-8");
 
-export enum Directive {
-  CreateValidator,
-  EditValidator,
-  Delegate,
-  Undelegate,
-  CollectRewards,
-}
+const transactionFields = [
+  { name: "nonce", maxLength: 32, numeric: true },
+  { name: "gasPrice", maxLength: 32, numeric: true },
+  { name: "gasLimit", maxLength: 32, numeric: true },
+  { name: "shardID", maxLength: 16, numeric: true },
+  { name: "toShardID", maxLength: 16, numeric: true },
+  { name: "to", length: 20 },
+  { name: "value", maxLength: 32, numeric: true },
+  { name: "data" },
+];
 
-interface Description {
-  name: string;
-  identity: string;
-  website: string;
-  securityContact: string;
-  details: string;
-}
-
-interface CommissionRate {
-  rate: string;
-  maxRate: string;
-  maxChangeRate: string;
-}
-
-interface CreateValidatorMsg {
-  validatorAddress: string;
-  description: Description;
-  commissionRates: CommissionRate;
-  minSelfDelegation: BigNumberish;
-  maxTotalDelegation: BigNumberish;
-  slotPubKeys: string[];
-  slotKeySigs?: string[];
-  amount: BigNumberish;
-}
-
-interface EditValidatorMsg {
-  validatorAddress: string;
-  description?: Partial<Description>;
-  commissionRate?: string;
-  minSelfDelegation?: BigNumberish;
-  maxTotalDelegation?: BigNumberish;
-  slotKeyToRemove?: string;
-  slotKeyToAdd?: string;
-  slotKeySig?: string;
-  active?: boolean;
-}
-
-interface DelegateMsg {
-  delegatorAddress: string;
-  validatorAddress: string;
-  amount: BigNumberish;
-}
-
-interface UndelegateMsg {
-  delegatorAddress: string;
-  validatorAddress: string;
-  amount: BigNumberish;
-}
-
-interface CollectRewardsMsg {
-  delegatorAddress: string;
-}
-
-export type Msg = CommissionRate | CreateValidatorMsg | EditValidatorMsg | DelegateMsg | UndelegateMsg | CollectRewardsMsg;
-
-export type UnsignedTransaction = Omit<BaseUnsignedTransaction, "accessList"> & {
-  type?: Directive;
-  msg?: Msg;
+const allowedTransactionKeys: { [key: string]: boolean } = {
+  nonce: true,
+  gasLimit: true,
+  gasPrice: true,
+  shardID: true,
+  toShardID: true,
+  to: true,
+  value: true,
+  data: true,
+  chainId: true,
 };
-
-export type StakingTransactionRequest =
-  | {
-      type: Directive.CreateValidator;
-      msg: CreateValidatorMsg;
-    }
-  | {
-      type: Directive.EditValidator;
-      msg: EditValidatorMsg;
-    }
-  | {
-      type: Directive.Delegate;
-      msg: DelegateMsg;
-    }
-  | {
-      type: Directive.Undelegate;
-      msg: UndelegateMsg;
-    }
-  | {
-      type: Directive.CollectRewards;
-      msg: CollectRewardsMsg;
-    };
-
-export type TransactionRequest = TransactionRequestBase | (TransactionRequestBase & StakingTransactionRequest);
-
-export interface Transaction extends Omit<BaseTransaction, "accessList"> {
-  type?: Directive;
-  msg?: Msg;
-}
-
-export interface TransactionReceipt extends TransactionReceiptBase {
-  type?: Directive;
-}
-
-interface Response {
-  blockNumber?: number;
-  blockHash?: string;
-  timestamp?: number;
-
-  confirmations: number;
-}
-
-export interface StakingTransactionResponse extends Transaction, Response {
-  hash: string;
-
-  type: Directive;
-  msg: Msg;
-
-  // Not optional (as it is in Transaction)
-  from: string;
-
-  // The raw transaction
-  raw?: string;
-
-  wait: (confirmations?: number) => Promise<TransactionReceipt>;
-}
-
-export interface TransactionResponse extends Transaction, Response {
-  hash: string;
-
-  // Not optional (as it is in Transaction)
-  from: string;
-
-  // The raw transaction
-  raw?: string;
-
-  shardID: number;
-  toShardID?: number;
-
-  // This function waits until the transaction has been mined
-  wait: (confirmations?: number) => Promise<TransactionReceipt>;
-}
-
-export interface CXTransactionReceipt {
-  blockHash: string;
-  blockNumber: number;
-  transactionHash: string;
-  to: string;
-  from: string;
-  shardID: number;
-  toShardID: number;
-  value: BigNumber;
-}
 
 function formatNumber(value: BigNumberish, name: string): Uint8Array {
   const result = stripZeros(BigNumber.from(value).toHexString());
@@ -247,24 +135,49 @@ function formatMsg(type: Directive, value: Msg): any {
   }
 }
 
-export function serialize(transaction: UnsignedTransaction, signature?: SignatureLike): string {
-  if (transaction.type != null) {
-    // return logger.throwError(
-    //   `unsupported transaction type: ${transaction.type}`,
-    //   Logger.errors.UNSUPPORTED_OPERATION,
-    //   {
-    //     operation: "serializeTransaction",
-    //     transactionType: transaction.type,
-    //   }
-    // );
+export function serialize(transaction: UnsignedStakingTransaction | UnsignedTransaction, signature?: SignatureLike): string {
+  if ("type" in transaction) {
     return serializeStakingTransaction(transaction, signature);
   }
 
-  // Legacy Transactions
   return serializeTransaction(transaction, signature);
 }
 
-export function serializeStakingTransaction(transaction: UnsignedTransaction, signature?: SignatureLike): string {
+function serializeTransaction(transaction: UnsignedTransaction, signature?: SignatureLike): string {
+  checkProperties(transaction, allowedTransactionKeys);
+
+  const fields: Array<string | Uint8Array> = [];
+
+  transactionFields.forEach(function (fieldInfo) {
+    let value = (<any>transaction)?.[fieldInfo.name] ?? [];
+    const options: DataOptions = {};
+
+    if (fieldInfo.numeric) {
+      options.hexPad = "left";
+    }
+
+    value = arrayify(hexlify(value, options));
+
+    // Fixed-width field
+    if (fieldInfo.length && value.length !== fieldInfo.length && value.length > 0) {
+      logger.throwArgumentError("invalid length for " + fieldInfo.name, "transaction:" + fieldInfo.name, value);
+    }
+
+    // Variable-width (with a maximum)
+    if (fieldInfo.maxLength) {
+      value = stripZeros(value);
+      if (value.length > fieldInfo.maxLength) {
+        logger.throwArgumentError("invalid length for " + fieldInfo.name, "transaction:" + fieldInfo.name, value);
+      }
+    }
+
+    fields.push(hexlify(value));
+  });
+
+  return encodeTransaction(transaction, fields, signature);
+}
+
+export function serializeStakingTransaction(transaction: UnsignedStakingTransaction, signature?: SignatureLike): string {
   const fields: any = [
     transaction.type === 0 ? "0x" : BigNumber.from(transaction.type).toHexString(),
     formatMsg(transaction.type, transaction.msg),
@@ -273,7 +186,11 @@ export function serializeStakingTransaction(transaction: UnsignedTransaction, si
     formatNumber(transaction.gasLimit || 0, "gasLimit"),
   ];
 
-  let chainId = 0;
+  return encodeTransaction(transaction, fields, signature);
+}
+
+function encodeTransaction(transaction: UnsignedTransaction, fields: Array<string | Uint8Array>, signature?: SignatureLike): string {
+  let chainId = 1;
   if (transaction.chainId != null) {
     // A chainId was provided; if non-zero we'll use EIP-155
     chainId = transaction.chainId;
@@ -286,12 +203,9 @@ export function serializeStakingTransaction(transaction: UnsignedTransaction, si
     chainId = Math.floor((signature.v - 35) / 2);
   }
 
-  // We have an EIP-155 transaction (chainId was specified and non-zero)
-  if (chainId !== 0) {
-    fields.push(hexlify(chainId)); // @TODO: hexValue?
-    fields.push("0x");
-    fields.push("0x");
-  }
+  fields.push(hexlify(chainId)); // @TODO: hexValue?
+  fields.push("0x");
+  fields.push("0x");
 
   // Requesting an unsigned transation
   if (!signature) {
@@ -411,24 +325,20 @@ function handleMsg(type: Directive, value: Array<string | Array<string>>): Msg {
   }
 }
 
-function handleStakingTransaction(transaction: any): Transaction {
-  // const transaction = RLP.decode(payload);
-
+function handleStakingTransaction(transaction: any): StakingTransaction {
   if (transaction.length !== 5 && transaction.length !== 8) {
     logger.throwArgumentError("invalid component count for staking transaction", "payload", "");
   }
 
   const directive: Directive = transaction[0] === "0x" ? 0 : handleNumber(transaction[0]).toNumber();
 
-  const tx: Transaction = {
+  const tx: StakingTransaction = {
     type: directive,
     msg: handleMsg(directive, transaction[1]),
     nonce: handleNumber(transaction[2]).toNumber(),
     gasPrice: handleNumber(transaction[3]),
     gasLimit: handleNumber(transaction[4]),
-    chainId: 0,
-    data: "0x",
-    value: BigNumber.from(0),
+    chainId: 1,
   };
 
   // Unsigned Transaction
@@ -439,7 +349,6 @@ function handleStakingTransaction(transaction: any): Transaction {
   try {
     tx.v = BigNumber.from(transaction[5]).toNumber();
   } catch (error) {
-    console.log({ error });
     return tx;
   }
 
@@ -454,34 +363,20 @@ function handleStakingTransaction(transaction: any): Transaction {
     // Signed Tranasaction
 
     tx.chainId = Math.floor((tx.v - 35) / 2);
-    if (tx.chainId < 0) {
-      tx.chainId = 0;
-    }
 
     let recoveryParam = tx.v - 27;
 
     const raw = transaction.slice(0, 5);
 
-    // chainId never zero in harmony?
-
-    if (tx.chainId !== 0) {
-      raw.push(hexlify(tx.chainId));
-      raw.push("0x");
-      raw.push("0x");
-      recoveryParam -= tx.chainId * 2 + 8;
-    }
+    raw.push(hexlify(tx.chainId));
+    raw.push("0x");
+    raw.push("0x");
+    recoveryParam -= tx.chainId * 2 + 8;
 
     const digest = keccak256(RLP.encode(raw));
-
     try {
-      tx.from = recoverAddress(digest, {
-        r: hexlify(tx.r),
-        s: hexlify(tx.s),
-        recoveryParam: recoveryParam,
-      });
-    } catch (error) {
-      console.log({ error });
-    }
+      tx.from = recoverAddress(digest, { r: hexlify(tx.r), s: hexlify(tx.s), recoveryParam: recoveryParam });
+    } catch (error) {}
 
     tx.hash = keccak256(RLP.encode(transaction));
   }
@@ -489,17 +384,81 @@ function handleStakingTransaction(transaction: any): Transaction {
   return tx;
 }
 
-export function parseStakingTransaction(payload: Uint8Array): Transaction {
-  return handleStakingTransaction(RLP.decode(payload));
+function handleTransaction(transaction: any): Transaction {
+  if (transaction.length !== 11 && transaction.length !== 8) {
+    logger.throwArgumentError("invalid raw transaction", "transaction", "");
+  }
+
+  const tx: Transaction = {
+    nonce: handleNumber(transaction[0]).toNumber(),
+    gasPrice: handleNumber(transaction[1]),
+    gasLimit: handleNumber(transaction[2]),
+    shardID: handleNumber(transaction[3]),
+    toShardID: handleNumber(transaction[4]),
+    to: handleAddress(transaction[5]),
+    value: handleNumber(transaction[6]),
+    data: transaction[7],
+    chainId: 1,
+  };
+
+  // Legacy unsigned transaction
+  if (transaction.length === 8) {
+    return tx;
+  }
+
+  try {
+    tx.v = BigNumber.from(transaction[8]).toNumber();
+  } catch (error) {
+    return tx;
+  }
+
+  tx.r = hexZeroPad(transaction[9], 32);
+  tx.s = hexZeroPad(transaction[10], 32);
+
+  if (BigNumber.from(tx.r).isZero() && BigNumber.from(tx.s).isZero()) {
+    // EIP-155 unsigned transaction
+    tx.chainId = tx.v;
+    tx.v = 0;
+  } else {
+    // Signed Tranasaction
+
+    tx.chainId = Math.floor((tx.v - 35) / 2);
+
+    let recoveryParam = tx.v - 27;
+
+    const raw = transaction.slice(0, 8);
+
+    raw.push(hexlify(tx.chainId));
+    raw.push("0x");
+    raw.push("0x");
+    recoveryParam -= tx.chainId * 2 + 8;
+
+    const digest = keccak256(RLP.encode(raw));
+    try {
+      tx.from = recoverAddress(digest, { r: hexlify(tx.r), s: hexlify(tx.s), recoveryParam: recoveryParam });
+    } catch (error) {}
+
+    tx.hash = keccak256(RLP.encode(transaction));
+  }
+
+  return tx;
 }
 
-export function parse(rawTransaction: BytesLike): Transaction {
+export function parseTransaction(payload: BytesLike): Transaction {
+  return handleTransaction(RLP.decode(arrayify(payload)));
+}
+
+export function parseStakingTransaction(payload: BytesLike): StakingTransaction {
+  return handleStakingTransaction(RLP.decode(arrayify(payload)));
+}
+
+export function parse(rawTransaction: BytesLike): StakingTransaction | Transaction {
   const payload = arrayify(rawTransaction);
-  // TODO: detect if is stakingTransaction without decoding
   const transaction = RLP.decode(payload);
+
   if (Array.isArray(transaction[1])) {
     return handleStakingTransaction(transaction);
   }
 
-  return parseTransaction(payload);
+  return handleTransaction(transaction);
 }
