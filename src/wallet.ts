@@ -1,10 +1,9 @@
 import { getAddress } from "./address";
 import { Wallet } from "@ethersproject/wallet";
-import { resolveProperties, Deferrable, shallowCopy, deepCopy } from "@ethersproject/properties";
+import { resolveProperties, Deferrable, shallowCopy } from "@ethersproject/properties";
 import { keccak256 } from "@ethersproject/keccak256";
 import { parseUnits } from "@ethersproject/units";
 import { Logger } from "@ethersproject/logger";
-import { BigNumber } from "@ethersproject/bignumber";
 import {
   Directive,
   TransactionRequest,
@@ -15,6 +14,7 @@ import {
 } from "./types";
 import { serialize } from "./transactions";
 import { HarmonyProvider } from "./provider";
+
 const logger = new Logger("hmy_wallet/0.0.1");
 
 const allowedTransactionKeys: Array<string> = [

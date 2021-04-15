@@ -16,44 +16,11 @@ import {
   CXTransactionReceipt,
   StakingTransactionResponse,
   StakingTransaction,
+  Block,
+  BlockWithTransactions,
 } from "./types";
 import HarmonyFormatter, { Delegation } from "./formatter";
 const logger = new Logger("hmy_provider/0.0.1");
-
-interface BlockBase {
-  hash: string;
-  parentHash: string;
-  number: number;
-
-  timestamp: number;
-  nonce: string;
-  difficulty: number;
-
-  gasLimit: BigNumber;
-  gasUsed: BigNumber;
-
-  miner: string;
-  extraData: string;
-
-  // Harmony
-
-  epoch: BigNumberish;
-  shardID: BigNumberish;
-  viewID: string;
-
-  transactions: Array<string | TransactionResponse>;
-  stakingTransactions: Array<string | TransactionResponse>;
-}
-
-export interface Block extends BlockBase {
-  transactions: Array<string>;
-  stakingTransactions: Array<string>;
-}
-
-export interface BlockWithTransactions extends BlockBase {
-  transactions: Array<TransactionResponse>;
-  stakingTransactions: Array<TransactionResponse>;
-}
 
 function timer(timeout: number): Promise<any> {
   return new Promise(function (resolve) {

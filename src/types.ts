@@ -1,6 +1,41 @@
-import { BigNumberish } from "@ethersproject/bignumber";
+import { BigNumber, BigNumberish } from "@ethersproject/bignumber";
 import { TransactionRequest as EthTransactionRequest, TransactionReceipt as EthTransactionReceipt } from "@ethersproject/abstract-provider";
 import { UnsignedTransaction as EthUnsignedTransaction, Transaction as EthTransaction } from "@ethersproject/transactions";
+
+interface BlockBase {
+  hash: string;
+  parentHash: string;
+  number: number;
+
+  timestamp: number;
+  nonce: string;
+  difficulty: number;
+
+  gasLimit: BigNumber;
+  gasUsed: BigNumber;
+
+  miner: string;
+  extraData: string;
+
+  // Harmony
+
+  epoch: BigNumberish;
+  shardID: BigNumberish;
+  viewID: string;
+
+  transactions: Array<string | TransactionResponse>;
+  stakingTransactions: Array<string | TransactionResponse>;
+}
+
+export interface Block extends BlockBase {
+  transactions: Array<string>;
+  stakingTransactions: Array<string>;
+}
+
+export interface BlockWithTransactions extends BlockBase {
+  transactions: Array<TransactionResponse>;
+  stakingTransactions: Array<TransactionResponse>;
+}
 
 export enum Directive {
   CreateValidator,

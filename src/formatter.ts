@@ -12,9 +12,9 @@ import {
   StakingTransactionResponse,
   CXTransactionReceipt,
   StakingTransaction,
+  Block,
 } from "./types";
 import { parseTransaction, parseStakingTransaction } from "./transactions";
-import { Block } from "./provider";
 
 type HarmonyFormats = {
   stakingTransaction: FormatFuncs;
@@ -35,6 +35,7 @@ type HarmonyFormats = {
   collectRewardsMsg: FormatFuncs;
 
   delegation: FormatFuncs;
+  undelegation: FormatFuncs;
 };
 
 export interface Delegation {
@@ -192,19 +193,25 @@ export default class HarmonyFormatter extends Formatter {
       delegatorAddress: address,
     };
 
+    formats.undelegation = {
+      amount: value,
+      epoch: number,
+    };
+
     formats.delegation = {
       delegatorAddress: address,
       validatorAddress: address,
       amount: value,
       reward: value,
-      undelegations: (v) =>
-        Formatter.check(
-          {
-            amount: value,
-            reward: value,
-          },
-          v
+      undelegations: Formatter.allowNull(
+        Formatter.arrayOf((undelegation) =>
+          Formatter.check(formats.undelegation, {
+            amount: undelegation.Amount,
+            epoch: undelegation.Epoch,
+          })
         ),
+        []
+      ),
     };
 
     return formats;
