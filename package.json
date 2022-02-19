@@ -1,8 +1,9 @@
 {
-  "name": "harmony-ethers-sdk",
-  "private": true,
+  "name": "ts-harmony-ethers-sdk",
+  "private": false,
   "version": "0.0.1",
   "main": "index.js",
+  "types": "index.d.ts",
   "license": "MIT",
   "dependencies": {
     "bech32": "^2.0.0",
